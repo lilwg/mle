@@ -159,10 +159,10 @@ def read_state(data, tracker=None):
 
         if tracker:
             etype, harmless = tracker.get_type(n)
-            # Coily is the only enemy that goes up — use both flags vote AND behavior
-            if etype == "coily":
-                going_up = True  # trust the flags vote
-            elif etype == "sam":
+            # Flags tell us the entity TYPE, behavior tells us the PHASE.
+            # Purple ball (flags=0x60) bounces down before hatching into Coily.
+            # Only treat as active Coily when actually going up (chasing).
+            if etype == "sam":
                 going_up = False  # Sam goes up too, but is harmless
         else:
             harmless = False
