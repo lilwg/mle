@@ -73,18 +73,15 @@ def _build_ball_positions(state):
     return balls
 
 
+SPAWN_POINTS = {(1, 0), (1, 1)}
+
 def _ball_positions_at_step(balls, step):
     """Return set of positions where balls are dangerous at a given step.
 
     Includes both the ball's position AND its previous position
     (mid-hop collision, matching ROM $BD1E logic).
-    Also includes spawn points (1,0) and (1,1) — balls can appear
-    there at any time.
     """
     positions = set()
-    # Spawn points are always dangerous — a new ball can appear any frame
-    positions.add((1, 0))
-    positions.add((1, 1))
     for cur, path in balls:
         if step == 0:
             positions.add(cur)
@@ -403,6 +400,12 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                  + escape * 30
                  + coily_d * 15
                  - path_len * 2)
+
+        # Penalize moves that land on spawn points — balls can appear any time
+        dr2, dc2 = MOVE_DELTAS[first_action]
+        dest = (row + dr2, col + dc2)
+        if dest in SPAWN_POINTS:
+            score -= 80  # soft penalty, not a hard block
 
         # Bonus for moving toward a disc when Coily is chasing
         if disc_target and coily:
