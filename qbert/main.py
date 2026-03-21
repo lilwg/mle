@@ -178,21 +178,13 @@ def run(overlay=False):
                         coily_enemy = e.pos
                         break
                 if coily_enemy:
-                    # Build danger zone: Coily + all positions reachable in 2 hops
+                    # Build danger zone: Coily + all its 1-hop moves
                     czr, czc = coily_enemy
                     c_zone = {coily_enemy}
-                    coily_moves = [(-1, -1), (-1, 0), (1, 0), (1, 1)]
-                    hop1 = []
-                    for cdr, cdc in coily_moves:
+                    for cdr, cdc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
                         cp = (czr + cdr, czc + cdc)
                         if is_valid(cp[0], cp[1]):
                             c_zone.add(cp)
-                            hop1.append(cp)
-                    for r1, c1 in hop1:
-                        for cdr, cdc in coily_moves:
-                            cp = (r1 + cdr, c1 + cdc)
-                            if is_valid(cp[0], cp[1]):
-                                c_zone.add(cp)
                     if (nr, nc) in c_zone:
                         # Planner picked a dangerous move — override with safest alternative
                         best_alt = None
