@@ -93,7 +93,8 @@ class EnemyTracker:
             return "sam", True
 
         # Known deadly types
-        if flags in (0x60, 0x58):
+        # 0x60 = Coily, 0x58 = Coily variant, 0x68 = Coily alternate phase
+        if flags in (0x60, 0x58, 0x68):
             return "coily", False
         if flags == 0x22:
             return "ball", False
