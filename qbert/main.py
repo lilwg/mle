@@ -51,12 +51,12 @@ def run(overlay=False):
                 env.wait(180)
                 env.step_n(*START_BUTTON, 5)
 
-                # Wait until lives > 0 (game actually started)
+                # Wait until game started
                 data = env.step()
                 state = read_state(data, tracker)
                 started = False
                 for _ in range(900):
-                    if state.lives > 0 and is_valid(state.qbert[0], state.qbert[1]):
+                    if 0 < state.lives <= 5 and is_valid(state.qbert[0], state.qbert[1]):
                         started = True
                         break
                     data = env.step()
@@ -70,6 +70,8 @@ def run(overlay=False):
             prev_lives = state.lives
             jumps = 0
             level = 1
+            ram_cubes_valid = False
+            visited = {}
             stuck_count = 0
             prev_pos = None
             pos = state.qbert
@@ -81,12 +83,23 @@ def run(overlay=False):
                 state = read_state(data, tracker)
                 lives = state.lives
 
-                # Build visited from RAM cube states — works for ALL levels
-                visited = {}
-                for ci in range(NUM_CUBES):
-                    if state.cube_states[ci] == state.target_color:
-                        visited[cube_index_to_pos(ci)] = True
-                cubes = NUM_CUBES - state.remaining_cubes
+                # Build visited from RAM cube states.
+                # Cube states may be stale from attract mode at game start.
+                # Only trust RAM after remaining_cubes has been seen at 28
+                # (indicating a fresh level reset).
+                if state.remaining_cubes >= 27:
+                    ram_cubes_valid = True
+                if ram_cubes_valid:
+                    visited = {}
+                    for ci in range(NUM_CUBES):
+                        if state.cube_states[ci] == state.target_color:
+                            visited[cube_index_to_pos(ci)] = True
+                else:
+                    # Trust Python-tracked visited until RAM stabilizes
+                    pos = state.qbert
+                    if is_valid(pos[0], pos[1]):
+                        visited[pos] = True
+                cubes = NUM_CUBES - state.remaining_cubes if ram_cubes_valid else len(visited)
 
                 # Death check: lives decreased OR Q*bert is on same square as Coily
                 # (game may kill Q*bert before the lives byte updates in RAM)
