@@ -21,7 +21,14 @@ QBERT_RAM = {
     "spawn_countdown": 0x0085,
     # Q*bert animation counter: 0 = mid-hop, >= 16 = ready for next hop
     "qb_anim": 0x0D5F,
+    # Cube tracking: 28 cube color states, target color, remaining count
+    "target_color": 0x0D1E,
+    "remaining_cubes": 0x0D23,
 }
+
+# Add 28 cube state addresses ($0D28-$0D43)
+for _c in range(NUM_CUBES):
+    QBERT_RAM[f"cube{_c}"] = 0x0D28 + _c
 
 for _n in range(10):
     _base = 0x0D70 + _n * 22
@@ -66,6 +73,9 @@ class GameState:
     lives: int = 0
     score_byte: int = 0
     spawn_countdown: int = 0  # frames until next enemy spawns at (1,0)
+    remaining_cubes: int = NUM_CUBES  # cubes left to color-change (from $0D23)
+    target_color: int = 0             # target cube color for this level ($0D1E)
+    cube_states: list = field(default_factory=list)  # 28 cube color values from RAM
 
 
 class EnemyTracker:
@@ -101,6 +111,33 @@ def pos_to_gw(row, col):
 
 def is_valid(r, c):
     return 0 <= r <= MAX_ROW and 0 <= c <= r
+
+
+# Cube index to grid position mapping.
+# RAM stores 28 cubes at $0D28-$0D43. Layout is right-to-left per row:
+#   cube0=(0,0)
+#   cube1=(1,1), cube2=(1,0)
+#   cube3=(2,2), cube4=(2,1), cube5=(2,0)
+#   etc.
+_CUBE_INDEX_TO_POS = []
+for _row in range(MAX_ROW + 1):
+    for _col in range(_row, -1, -1):  # right-to-left
+        _CUBE_INDEX_TO_POS.append((_row, _col))
+
+# Reverse mapping: (row, col) -> cube index
+_POS_TO_CUBE_INDEX = {pos: idx for idx, pos in enumerate(_CUBE_INDEX_TO_POS)}
+
+
+def cube_index_to_pos(idx):
+    """Convert cube index (0-27) to grid position (row, col)."""
+    if 0 <= idx < len(_CUBE_INDEX_TO_POS):
+        return _CUBE_INDEX_TO_POS[idx]
+    return None
+
+
+def pos_to_cube_index(row, col):
+    """Convert grid position (row, col) to cube index (0-27), or None."""
+    return _POS_TO_CUBE_INDEX.get((row, col))
 
 
 LEFT = 2   # Up-Left action
@@ -196,10 +233,16 @@ def read_state(data, tracker=None):
 
     discs = _parse_discs(data)
 
+    # Read cube states from RAM
+    cube_states = [data.get(f"cube{i}", 0) for i in range(NUM_CUBES)]
+
     return GameState(
         qbert=qb_pos, qbert_prev=qb_prev,
         enemies=enemies, discs=discs,
         lives=data.get("lives", 0),
         score_byte=data.get("score", 0),
         spawn_countdown=data.get("spawn_countdown", 0),
+        remaining_cubes=data.get("remaining_cubes", NUM_CUBES),
+        target_color=data.get("target_color", 0),
+        cube_states=cube_states,
     )

@@ -8,13 +8,28 @@ import random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mle import MameEnv
-from qbert.state import QBERT_RAM, read_state, is_valid, NUM_CUBES, MAX_ROW, EnemyTracker
+from qbert.state import QBERT_RAM, read_state, is_valid, NUM_CUBES, MAX_ROW, EnemyTracker, cube_index_to_pos
 from qbert.planner import (
     decide, neighbors, grid_dist, MOVE_BUTTONS, MOVE_NAMES, MOVE_DELTAS,
     COIN_BUTTON, START_BUTTON, DOWN,
 )
 
 ROMS_PATH = "/Users/pat/mame/roms"
+
+
+def _merge_ram_cubes_into_visited(state, visited):
+    """Mark cubes as visited if their RAM color matches the target color.
+
+    This supplements Python-tracked visited positions with ground-truth
+    from RAM, ensuring the planner doesn't revisit already-completed cubes.
+    """
+    if state.target_color == 0:
+        return  # target not set yet
+    for i, color in enumerate(state.cube_states):
+        if color == state.target_color:
+            pos = cube_index_to_pos(i)
+            if pos is not None:
+                visited[pos] = True
 
 # Timing constants (in frames, 1 frame per step)
 # Old MAMEToolkit used frame_ratio=3: 4 steps * 3 = 12 frames hold, 10 * 3 = 30 wait
@@ -162,7 +177,11 @@ def run(overlay=False):
                         port, field = MOVE_BUTTONS[act]
                         qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
-                        for _ in range(50):
+                        for _ in range(20):
+                            data = env.step()
+                            if data.get("qb_anim", 16) < 16:
+                                break
+                        for _ in range(40):
                             data = env.step()
                             if data.get("qb_anim", 0) >= 16:
                                 break
@@ -247,14 +266,18 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump, then wait until Q*bert's animation is done
+                # Execute jump, then wait for animation cycle to complete
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                # Wait for hop animation to complete (anim counter >= 16 = ready)
-                for _ in range(50):
+                # Phase 1: wait for hop animation to START (anim drops below 16)
+                for _ in range(20):
                     data = env.step()
-                    anim = data.get("qb_anim", 0)
-                    if anim >= 16:
+                    if data.get("qb_anim", 16) < 16:
+                        break
+                # Phase 2: wait for hop animation to COMPLETE (anim returns to >= 16)
+                for _ in range(40):
+                    data = env.step()
+                    if data.get("qb_anim", 0) >= 16:
                         break
                 jumps += 1
 
@@ -265,6 +288,9 @@ def run(overlay=False):
                     pos = new_pos
                 was_new = not visited.get(pos, False)
                 visited[pos] = True
+
+                # Merge RAM cube states into visited (ground-truth supplement)
+                _merge_ram_cubes_into_visited(state, visited)
 
                 # Log significant events
                 enemy_str = ""
@@ -295,8 +321,8 @@ def run(overlay=False):
                         cv2.waitKey(1)
                     data = frame_data
 
-                # Level complete
-                if cubes >= NUM_CUBES:
+                # Level complete (score-based OR RAM remaining_cubes == 0)
+                if cubes >= NUM_CUBES or state.remaining_cubes == 0:
                     print(f"\n  === LEVEL {level} COMPLETE! score={total_score} ===\n")
                     level += 1
                     cubes = 0
