@@ -73,6 +73,7 @@ def run(overlay=False):
             level = 1
             stuck_count = 0
             prev_pos = None
+            qbert_prev_known = None  # Python-tracked Q*bert previous position
 
             pos = state.qbert
             if is_valid(pos[0], pos[1]):
@@ -137,18 +138,22 @@ def run(overlay=False):
                     if valid:
                         act = random.choice(valid)[0]
                         port, field = MOVE_BUTTONS[act]
+                        qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
                         data = env.wait(HOP_WAIT)
                         stuck_count = 0
                     continue
 
                 # Decide action
-                action = decide(state, visited)
+                action = decide(state, visited, qbert_prev_known)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
                 if not is_valid(nr, nc):
                     data = env.step()
                     continue
+
+                # Track Q*bert's position before hopping
+                qbert_prev_known = pos
 
                 # Execute jump
                 port, field = MOVE_BUTTONS[action]

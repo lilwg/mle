@@ -123,34 +123,18 @@ def _simulate_coily(coily_pos, coily_target, qbert_path, num_steps):
 def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
     """Check collision between Q*bert and Coily during a hop.
 
-    ROM $BD1E checks three conditions:
-      1. Q*bert current vs Enemy current  (both at destination)
-      2. Q*bert current vs Enemy previous (Q*bert lands where enemy was)
-      3. Q*bert previous vs Enemy current (enemy lands where Q*bert was)
-
-    Since both hop simultaneously, "current" = after hop, "previous" = before hop.
-
-    Also blocks moves to any square adjacent to Coily's current position,
-    because our Coily direction prediction can be wrong (stale qbert_prev
-    from RAM read timing) — if Coily is 1 hop away, any of its 4 neighbors
-    could be where it actually goes.
+    ROM $BD1E checks:
+      1. Q*bert dest vs Coily dest (both land on same square)
+      2. Q*bert dest vs Coily prev (Q*bert lands where Coily was)
+      3. Q*bert prev vs Coily dest (Coily lands where Q*bert was = swap)
     """
     if coily_before is None and coily_after is None:
         return False
-    # Q*bert destination vs Coily destination
     if coily_after and qbert_to == coily_after:
         return True
-    # Q*bert destination vs Coily's pre-hop position
     if coily_before and qbert_to == coily_before:
         return True
-    # Q*bert's pre-hop position vs Coily destination (swap/crossing)
     if coily_after and qbert_from == coily_after:
-        return True
-    # Safety margin: if Q*bert is jumping to a square adjacent to Coily,
-    # Coily could go ANY direction — our prediction might be wrong due to
-    # stale qbert_prev. Block all neighbors of Coily's current position.
-    if coily_before and grid_dist(qbert_to[0], qbert_to[1],
-                                   coily_before[0], coily_before[1]) <= 1:
         return True
     return False
 
@@ -251,8 +235,13 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 # Main decision
 # ---------------------------------------------------------------------------
 
-def decide(state: GameState, visited: dict) -> int:
-    """Pick the best action by searching safe multi-hop routes."""
+def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
+    """Pick the best action by searching safe multi-hop routes.
+
+    qbert_prev_known: Q*bert's position before the last hop, tracked by the
+    game loop in Python. More reliable than state.qbert_prev from RAM which
+    can be stale due to read timing.
+    """
     row, col = state.qbert
     if not is_valid(row, col):
         return DOWN
@@ -261,14 +250,16 @@ def decide(state: GameState, visited: dict) -> int:
     if not valid:
         return DOWN
 
+    # Use Python-tracked prev if available, fall back to RAM
+    qb_prev = qbert_prev_known if qbert_prev_known else state.qbert_prev
+
     # Find Coily — use etype not going_up, since Coily can be stationary
-    # between hops (pos == prev_pos → going_up is False)
     coily = None
     coily_target = None
     for e in state.enemies:
         if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
             coily = e.pos
-            coily_target = state.qbert_prev
+            coily_target = qb_prev
             if coily == coily_target:
                 coily_target = state.qbert
             break
