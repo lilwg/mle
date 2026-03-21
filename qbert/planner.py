@@ -186,7 +186,7 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
             coily_d = grid_dist(nr, nc, coily_after[0], coily_after[1])
 
         escape = len(neighbors(nr, nc))
-        routes.append((action, new, escape, 1, coily_d))
+        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_after))
         q.append((nr, nc, 1, action, path, new))
 
     while q:
@@ -223,12 +223,55 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
             if coily_after:
                 coily_d = grid_dist(nr, nc, coily_after[0], coily_after[1])
 
-            routes.append((first_action, new, escape, next_step, coily_d))
+            routes.append((first_action, new, escape, next_step, coily_d,
+                           (nr, nc), coily_after))
 
             if next_step < max_depth:
                 q.append((nr, nc, next_step, first_action, new_path, new))
 
     return routes
+
+
+def _can_escape_coily(qr, qc, coily_pos, coily_target, depth=6):
+    """Simulate Q*bert fleeing from Coily for `depth` hops.
+
+    Q*bert picks the move that maximizes distance + escape routes.
+    Coily uses the chase algorithm. Returns True if Q*bert survives.
+    """
+    cr, cc = coily_pos
+    target = coily_target
+
+    for i in range(depth):
+        # Coily hops
+        ncr, ncc = predict_coily(cr, cc, target[0], target[1])
+        if not is_valid(ncr, ncc):
+            return True  # Coily fell off
+        cr, cc = ncr, ncc
+        target = (qr, qc)  # after first hop, chase Q*bert's current
+
+        if (cr, cc) == (qr, qc):
+            return False  # caught
+
+        # Q*bert picks best escape
+        best = None
+        best_score = -1
+        for _, nr, nc in neighbors(qr, qc):
+            if (nr, nc) == (cr, cc):
+                continue
+            d = grid_dist(nr, nc, cr, cc)
+            exits = len(neighbors(nr, nc))
+            s = d * 10 + exits
+            if s > best_score:
+                best_score = s
+                best = (nr, nc)
+
+        if best is None:
+            return False
+        qr, qc = best
+        if (cr, cc) == (qr, qc):
+            return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +327,19 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
 
     # Score each first_action by its best route
     action_scores = {}
-    for first_action, new_cubes, escape, path_len, coily_d in routes:
+    for first_action, new_cubes, escape, path_len, coily_d, endpoint, coily_end in routes:
         score = (new_cubes * 200
                  + escape * 30
                  + coily_d * 15
                  - path_len * 2)
+
+        # Post-route survival check: simulate Q*bert fleeing from endpoint.
+        # If Coily catches Q*bert within 6 hops, the route is a trap.
+        if coily_end and coily_d <= 5:
+            if not _can_escape_coily(endpoint[0], endpoint[1],
+                                     coily_end, endpoint, depth=6):
+                score -= 600  # route ends in a trap
+
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
 
