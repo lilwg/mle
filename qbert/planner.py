@@ -151,7 +151,7 @@ def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
 # Route search
 # ---------------------------------------------------------------------------
 
-def _find_safe_routes(qbert_pos, coily_pos, coily_target, coily_zone, balls, visited, max_depth=7, debug=False):
+def _find_safe_routes(qbert_pos, coily_pos, coily_target, coily_zone, balls, visited, max_depth=7, debug=False, spawn_imminent=False):
     """BFS to find routes that don't collide with any enemy.
 
     At each step, simulates Coily's chase and ball bounces, checking the
@@ -352,7 +352,8 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
 
     routes = _find_safe_routes(
         (row, col), coily, coily_target, coily_zone, balls, visited, max_depth=7,
-        debug=debug and coily is not None and grid_dist(row, col, coily[0], coily[1]) <= 3
+        debug=debug and coily is not None and grid_dist(row, col, coily[0], coily[1]) <= 3,
+        spawn_imminent=spawn_imminent,
     )
 
     if debug and coily and grid_dist(row, col, coily[0], coily[1]) <= 3:
