@@ -109,9 +109,15 @@ def _coily_at_step(coily_pos, coily_target, qbert_positions, step):
     return (r, c)
 
 
-def _is_dangerous_at_step(pos, coily_pos, ball_positions):
-    """Check if a position is dangerous (Coily or ball there)."""
-    if coily_pos and pos == coily_pos:
+def _is_dangerous_at_step(pos, coily_now, coily_next, ball_positions):
+    """Check if a position is dangerous (Coily or ball there).
+
+    Checks both Coily's current position AND predicted next position,
+    since collision happens if Q*bert shares a square with Coily at any point.
+    """
+    if coily_now and pos == coily_now:
+        return True
+    if coily_next and pos == coily_next:
         return True
     if pos in ball_positions:
         return True
@@ -135,17 +141,22 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
     q = deque()
 
     for action, nr, nc in neighbors(start[0], start[1]):
-        # Check step 1: is the destination safe?
+        # Check step 1: Coily's current pos AND where Coily will be after 1 hop
+        coily_0 = coily_pos  # Coily's current position
         coily_1 = _coily_at_step(coily_pos, coily_target, [start], 1)
         balls_1 = _ball_positions_at_step(balls, 1)
-        if _is_dangerous_at_step((nr, nc), coily_1, balls_1):
+        if _is_dangerous_at_step((nr, nc), coily_0, coily_1, balls_1):
             continue
         new = 1 if not visited.get((nr, nc), False) else 0
         q.append((nr, nc, 1, action, [start, (nr, nc)], new))
 
-        # Even a 1-step route is valid
         escape = len(neighbors(nr, nc))
-        routes.append((action, new, escape, 1))
+        coily_d = 99
+        if coily_pos:
+            c1 = _coily_at_step(coily_pos, coily_target, [start, (nr, nc)], 1)
+            if c1:
+                coily_d = grid_dist(nr, nc, c1[0], c1[1])
+        routes.append((action, new, escape, 1, coily_d))
 
     while q:
         cr, cc, step, first_action, path, new_cubes = q.popleft()
@@ -155,11 +166,12 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
         for _, nr, nc in neighbors(cr, cc):
             next_step = step + 1
 
-            # Simulate Coily and balls at this step
-            coily_s = _coily_at_step(coily_pos, coily_target, path, next_step)
+            # Coily at previous step and at this step
+            coily_prev = _coily_at_step(coily_pos, coily_target, path, step)
+            coily_next = _coily_at_step(coily_pos, coily_target, path, next_step)
             balls_s = _ball_positions_at_step(balls, next_step)
 
-            if _is_dangerous_at_step((nr, nc), coily_s, balls_s):
+            if _is_dangerous_at_step((nr, nc), coily_prev, coily_next, balls_s):
                 continue
 
             # Don't revisit positions in the same path (no loops)
@@ -170,7 +182,13 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
             new_path = path + [(nr, nc)]
 
             escape = len(neighbors(nr, nc))
-            routes.append((first_action, new, escape, next_step))
+            # Compute Coily distance at endpoint for scoring
+            coily_d = 99
+            if coily_pos:
+                c_end = _coily_at_step(coily_pos, coily_target, new_path, next_step)
+                if c_end:
+                    coily_d = grid_dist(nr, nc, c_end[0], c_end[1])
+            routes.append((first_action, new, escape, next_step, coily_d))
 
             if next_step < max_depth:
                 q.append((nr, nc, next_step, first_action, new_path, new))
@@ -229,13 +247,15 @@ def decide(state: GameState, visited: dict) -> int:
 
     # Score each first_action by the best route it leads to
     action_scores = {}
-    for first_action, new_cubes, escape, path_len in routes:
-        # Score: new cubes matter most, then escape routes at endpoint,
-        # then shorter paths (reach cubes sooner)
-        score = new_cubes * 1000 + escape * 10 - path_len
+    for first_action, new_cubes, escape, path_len, coily_d in routes:
+        # New cubes are valuable but not at the cost of getting trapped.
+        # Escape routes at endpoint and distance from Coily prevent traps.
+        score = (new_cubes * 200
+                 + escape * 30
+                 + coily_d * 15
+                 - path_len * 2)
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
 
-    # Pick the action with the best route
     best_action = max(action_scores, key=action_scores.get)
     return best_action
