@@ -57,10 +57,14 @@ def nearest_unvisited(row, col, visited):
 # ---------------------------------------------------------------------------
 
 def _build_ball_positions(state):
-    """Build list of (current_pos, full_future_path) for each active ball."""
+    """Build list of (current_pos, full_future_path) for each non-Coily enemy."""
     balls = []
     for e in state.enemies:
-        if e.harmless or e.going_up:
+        if e.harmless:
+            continue
+        # Skip Coily — it's handled separately via chase simulation.
+        # Use etype (from tracker votes), NOT going_up (unreliable when stationary).
+        if e.etype == "coily":
             continue
         if not is_valid(e.pos[0], e.pos[1]):
             continue
@@ -315,13 +319,26 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
     )
 
     if not routes:
-        # Desperation: pick move furthest from Coily
+        # No safe routes — avoid immediate dangers at minimum
+        dangers = set()
+        if coily:
+            dangers.add(coily)
+        balls_now = _ball_positions_at_step(balls, 0)
+        balls_next = _ball_positions_at_step(balls, 1)
+        dangers.update(balls_now)
+        dangers.update(balls_next)
+
         best_action = DOWN
-        best_dist = -1
+        best_score = -999
         for action, nr, nc in valid:
+            if (nr, nc) in dangers:
+                score = -500
+            else:
+                score = 0
             d = grid_dist(nr, nc, coily[0], coily[1]) if coily else 0
-            if d > best_dist:
-                best_dist = d
+            score += d * 10 + len(neighbors(nr, nc))
+            if score > best_score:
+                best_score = score
                 best_action = action
         return best_action
 
@@ -332,14 +349,6 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
                  + escape * 30
                  + coily_d * 15
                  - path_len * 2)
-
-        # Post-route survival check: simulate Q*bert fleeing from endpoint.
-        # If Coily catches Q*bert within 6 hops, the route is a trap.
-        if coily_end and coily_d <= 5:
-            if not _can_escape_coily(endpoint[0], endpoint[1],
-                                     coily_end, endpoint, depth=6):
-                score -= 600  # route ends in a trap
-
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
 
