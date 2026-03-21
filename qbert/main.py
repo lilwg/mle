@@ -34,8 +34,8 @@ def run(overlay=False):
     print("Q*bert Agent (MLE)")
     tracker = EnemyTracker()
 
-    # Initial wait for game to boot
-    env.wait(600)
+    # Initial wait for game to boot (randomize to vary MAME seed)
+    env.wait(600 + random.randint(0, 120))
 
     episode = 0
     try:
@@ -46,6 +46,8 @@ def run(overlay=False):
                 env.wait(900)
 
             # Insert coin and start game, retry if needed
+            # Random wait to break MAME determinism (different seed each episode)
+            env.wait(random.randint(0, 60))
             for attempt in range(3):
                 env.step_n(*COIN_BUTTON, 15)
                 env.wait(180)
@@ -232,15 +234,13 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump, then wait for full animation cycle
+                # Execute jump, wait for animation to complete
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                # Phase 1: wait for hop to START (anim drops below 16)
                 for _ in range(20):
                     data = env.step()
                     if data.get("qb_anim", 16) < 16:
                         break
-                # Phase 2: wait for hop to COMPLETE (anim returns >= 16)
                 for _ in range(40):
                     data = env.step()
                     if data.get("qb_anim", 0) >= 16:
