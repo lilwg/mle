@@ -336,15 +336,13 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                       f"esc={best[2]} coily_d={best[4]}")
 
     if not routes:
-        # No safe routes — just maximize distance from Coily and escape options.
-        # Don't freeze — a bad move is better than no move.
-        best_action = valid[0][0]  # guaranteed valid fallback
+        # No safe routes — use Coily zone to avoid, maximize distance.
+        best_action = valid[0][0]
         best_score = -999
         for action, nr, nc in valid:
             score = 0
             if coily:
-                # Avoid Coily's current position
-                if (nr, nc) == coily:
+                if (nr, nc) in coily_zone:
                     score -= 500
                 score += grid_dist(nr, nc, coily[0], coily[1]) * 10
             # Avoid balls
