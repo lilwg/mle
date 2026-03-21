@@ -332,24 +332,23 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                       f"esc={best[2]} coily_d={best[4]}")
 
     if not routes:
-        # No safe routes — avoid immediate dangers at minimum
-        dangers = set()
-        if coily:
-            dangers.add(coily)
-        balls_now = _ball_positions_at_step(balls, 0)
-        balls_next = _ball_positions_at_step(balls, 1)
-        dangers.update(balls_now)
-        dangers.update(balls_next)
-
-        best_action = DOWN
+        # No safe routes — just maximize distance from Coily and escape options.
+        # Don't freeze — a bad move is better than no move.
+        best_action = valid[0][0]  # guaranteed valid fallback
         best_score = -999
         for action, nr, nc in valid:
-            if (nr, nc) in dangers:
-                score = -500
-            else:
-                score = 0
-            d = grid_dist(nr, nc, coily[0], coily[1]) if coily else 0
-            score += d * 10 + len(neighbors(nr, nc))
+            score = 0
+            if coily:
+                # Avoid Coily's current position
+                if (nr, nc) == coily:
+                    score -= 500
+                score += grid_dist(nr, nc, coily[0], coily[1]) * 10
+            # Avoid balls
+            balls_now = _ball_positions_at_step(balls, 0)
+            balls_next = _ball_positions_at_step(balls, 1)
+            if (nr, nc) in balls_now or (nr, nc) in balls_next:
+                score -= 200
+            score += len(neighbors(nr, nc)) * 5
             if score > best_score:
                 best_score = score
                 best_action = action
