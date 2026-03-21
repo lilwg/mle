@@ -177,14 +177,7 @@ def run(overlay=False):
                         port, field = MOVE_BUTTONS[act]
                         qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
-                        for _ in range(20):
-                            data = env.step()
-                            if data.get("qb_anim", 16) < 16:
-                                break
-                        for _ in range(40):
-                            data = env.step()
-                            if data.get("qb_anim", 0) >= 16:
-                                break
+                        data = env.wait(HOP_WAIT)
                         stuck_count = 0
                     continue
 
