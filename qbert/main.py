@@ -110,6 +110,8 @@ def run(overlay=False):
                     if lives == 0:
                         break
                     prev_lives = lives
+                    tracker.reset()
+                    qbert_prev_known = None
                     data = env.wait(300)
                     state = read_state(data, tracker)
                     pos = state.qbert
@@ -117,6 +119,7 @@ def run(overlay=False):
                         visited[pos] = True
                     jumps = 0
                     stuck_count = 0
+                    prev_pos = None
                     continue
                 prev_lives = lives
 
