@@ -12,6 +12,11 @@ QBERT_RAM = {
     "qb_gw1": 0x0D67,
     "qb_prev0": 0x0D68,
     "qb_prev1": 0x0D69,
+    # Disc data: $0D4C/$0D4D = availability, $0D4E/$0D51 = row positions
+    "disc0_avail": 0x0D4C,
+    "disc1_avail": 0x0D4D,
+    "disc0_row": 0x0D4E,
+    "disc1_row": 0x0D51,
 }
 
 for _n in range(10):
@@ -27,6 +32,14 @@ for _n in range(10):
 
 
 @dataclass
+class Disc:
+    row: int       # disc is between this row and row+1 on the edge
+    side: str      # "left" or "right"
+    jump_from: tuple  # (row, col) Q*bert must be at
+    direction: int    # action index to jump to disc
+
+
+@dataclass
 class Enemy:
     slot: int
     pos: tuple
@@ -37,7 +50,7 @@ class Enemy:
     state: int
     going_up: bool
     harmless: bool
-    etype: str  # "coily", "ball", "unknown"
+    etype: str
 
 
 @dataclass
@@ -45,17 +58,13 @@ class GameState:
     qbert: tuple
     qbert_prev: tuple
     enemies: list = field(default_factory=list)
+    discs: list = field(default_factory=list)
     lives: int = 0
     score_byte: int = 0
 
 
 class EnemyTracker:
-    """Tracks whether each slot has ever gone up (= Coily).
-
-    Purple ball bounces down for 7 hops then hatches into Coily which goes up.
-    Once we see a slot go up, it's Coily until the slot goes inactive.
-    No flags byte needed — pure behavior.
-    """
+    """Tracks whether each slot has ever gone up (= Coily)."""
 
     def __init__(self):
         self._was_active = {}
@@ -87,6 +96,43 @@ def pos_to_gw(row, col):
 
 def is_valid(r, c):
     return 0 <= r <= MAX_ROW and 0 <= c <= r
+
+
+LEFT = 2   # Up-Left action
+UP = 0     # Up-Right action
+
+
+def _parse_discs(data):
+    """Parse disc availability and positions from RAM.
+
+    Disc positions: $0D4E and $0D51 store the row number.
+    To use a disc, Q*bert jumps off the edge at row = disc_row + 1.
+    Left disc: jump UP-LEFT from (disc_row+1, 0)
+    Right disc: jump UP-RIGHT from (disc_row+1, disc_row+1)
+    """
+    discs = []
+    d0_avail = data.get("disc0_avail", 0)
+    d0_row = data.get("disc0_row", 0)
+    d1_avail = data.get("disc1_avail", 0)
+    d1_row = data.get("disc1_row", 0)
+
+    if d0_avail and d0_row > 0:
+        jump_row = d0_row + 1
+        discs.append(Disc(
+            row=d0_row, side="left",
+            jump_from=(jump_row, 0),
+            direction=LEFT,
+        ))
+
+    if d1_avail and d1_row > 0:
+        jump_row = d1_row + 1
+        discs.append(Disc(
+            row=d1_row, side="right",
+            jump_from=(jump_row, jump_row),
+            direction=UP,
+        ))
+
+    return discs
 
 
 def read_state(data, tracker=None):
@@ -128,7 +174,7 @@ def read_state(data, tracker=None):
 
         if is_coily:
             etype = "coily"
-            going_up = True  # Coily is always treated as chasing
+            going_up = True
         else:
             etype = "ball"
 
@@ -143,9 +189,11 @@ def read_state(data, tracker=None):
             etype=etype,
         ))
 
+    discs = _parse_discs(data)
+
     return GameState(
         qbert=qb_pos, qbert_prev=qb_prev,
-        enemies=enemies,
+        enemies=enemies, discs=discs,
         lives=data.get("lives", 0),
         score_byte=data.get("score", 0),
     )

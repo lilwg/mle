@@ -167,6 +167,32 @@ def run(overlay=False):
                 action = decide(state, visited, qbert_prev_known)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
+
+                # Check if this is a disc jump (intentionally off pyramid)
+                is_disc_jump = False
+                for disc in state.discs:
+                    if pos == disc.jump_from and action == disc.direction:
+                        is_disc_jump = True
+                        break
+
+                if is_disc_jump:
+                    # Execute disc jump — long wait for ride animation
+                    port, field = MOVE_BUTTONS[action]
+                    qbert_prev_known = pos
+                    env.step_n(port, field, BUTTON_HOLD)
+                    data = env.wait(300)  # disc ride takes ~5 seconds
+                    tracker.reset()
+                    qbert_prev_known = None
+                    state = read_state(data, tracker)
+                    pos = state.qbert
+                    if is_valid(pos[0], pos[1]):
+                        visited[pos] = True
+                    prev_pos = None
+                    stuck_count = 0
+                    jumps += 1
+                    print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
+                    continue
+
                 if not is_valid(nr, nc):
                     data = env.step()
                     continue

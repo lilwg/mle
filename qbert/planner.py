@@ -297,6 +297,14 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 coily_target = state.qbert
             break
 
+    # DISC STRATEGY: if Coily is active and Q*bert is at a disc jump position,
+    # use the disc. Coily must be close enough to follow and fall off.
+    if coily:
+        coily_dist = grid_dist(row, col, coily[0], coily[1])
+        for disc in state.discs:
+            if (row, col) == disc.jump_from and coily_dist <= 4:
+                return disc.direction
+
     balls = _build_ball_positions(state)
 
     # All squares Coily could reach in 1 hop (current pos + 4 possible moves)
@@ -354,6 +362,16 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 best_action = action
         return best_action
 
+    # When Coily is active, find nearest disc to route toward
+    disc_target = None
+    if coily and state.discs:
+        best_disc_dist = 999
+        for disc in state.discs:
+            d = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+            if d < best_disc_dist:
+                best_disc_dist = d
+                disc_target = disc.jump_from
+
     # Score each first_action by its best route
     action_scores = {}
     for first_action, new_cubes, escape, path_len, coily_d, endpoint, coily_end in routes:
@@ -361,6 +379,18 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                  + escape * 30
                  + coily_d * 15
                  - path_len * 2)
+
+        # Bonus for moving toward a disc when Coily is chasing
+        if disc_target and coily:
+            coily_dist = grid_dist(row, col, coily[0], coily[1])
+            if coily_dist <= 5:
+                dr2, dc2 = MOVE_DELTAS[first_action]
+                nr2, nc2 = row + dr2, col + dc2
+                d_before = grid_dist(row, col, disc_target[0], disc_target[1])
+                d_after = grid_dist(nr2, nc2, disc_target[0], disc_target[1])
+                if d_after < d_before:
+                    score += 100  # strong pull toward disc
+
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
 
