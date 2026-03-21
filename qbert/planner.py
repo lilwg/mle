@@ -187,6 +187,7 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
         if (nr, nc) in balls_1:
             continue
 
+        path = [start, (nr, nc)]
         new = 1 if not visited.get((nr, nc), False) else 0
 
         coily_d = 99
