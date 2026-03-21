@@ -259,19 +259,15 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump, then wait for animation cycle to complete
+                # Execute jump. Press direction briefly to start the hop.
+                # The grid word updates immediately. The game queues the next
+                # direction input while Q*bert is mid-hop, so we can start
+                # pressing the next direction as soon as we've decided.
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                # Phase 1: wait for hop animation to START (anim drops below 16)
-                for _ in range(20):
-                    data = env.step()
-                    if data.get("qb_anim", 16) < 16:
-                        break
-                # Phase 2: wait for hop animation to COMPLETE (anim returns to >= 16)
-                for _ in range(40):
-                    data = env.step()
-                    if data.get("qb_anim", 0) >= 16:
-                        break
+                # Wait just enough for the grid word to update and Q*bert
+                # to be ready for the next queued input
+                data = env.wait(18 - BUTTON_HOLD)
                 jumps += 1
 
                 # Update position
