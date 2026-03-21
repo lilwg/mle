@@ -302,14 +302,18 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
             break
 
     # Use disc when Coily is within 1 hop — escape to (0,0).
-    # Coily may or may not die, but Q*bert survives.
+    # Strategy: save last disc for endgame (>= 22 cubes done).
+    remaining_discs = len(state.discs)
+    cubes_done = NUM_CUBES - state.remaining_cubes
     if coily:
         coily_d = grid_dist(row, col, coily[0], coily[1])
         for disc in state.discs:
             if (row, col) != disc.jump_from:
                 continue
-            if coily_d <= 1:
-                return disc.direction
+            if coily_d <= 2:
+                # Use disc freely if we have 2+, or if endgame
+                if remaining_discs >= 2 or cubes_done >= 20:
+                    return disc.direction
 
     balls = _build_ball_positions(state)
     # Spawn at (1,0)/(1,1) happens when $0085 countdown hits 0.
@@ -373,11 +377,12 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 best_action = action
         return best_action
 
-    # When Coily is close, route toward nearest disc as escape
+    # Route toward disc when Coily is active.
+    # More aggressive in endgame — always pull toward disc when cubes >= 20.
     disc_target = None
     if coily and state.discs:
         coily_d = grid_dist(row, col, coily[0], coily[1])
-        if coily_d <= 4:
+        if coily_d <= 5 or cubes_done >= 20:
             best_dd = 999
             for disc in state.discs:
                 dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
@@ -398,14 +403,14 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
 
         # Bonus for moving toward a disc when Coily is chasing
         if disc_target and coily:
-            coily_dist = grid_dist(row, col, coily[0], coily[1])
-            if coily_dist <= 5:
-                dr2, dc2 = MOVE_DELTAS[first_action]
-                nr2, nc2 = row + dr2, col + dc2
-                d_before = grid_dist(row, col, disc_target[0], disc_target[1])
-                d_after = grid_dist(nr2, nc2, disc_target[0], disc_target[1])
-                if d_after < d_before:
-                    score += 100  # strong pull toward disc
+            dr2, dc2 = MOVE_DELTAS[first_action]
+            nr2, nc2 = row + dr2, col + dc2
+            d_before = grid_dist(row, col, disc_target[0], disc_target[1])
+            d_after = grid_dist(nr2, nc2, disc_target[0], disc_target[1])
+            if d_after < d_before:
+                # Stronger pull in endgame
+                pull = 200 if cubes_done >= 20 else 100
+                score += pull
 
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
