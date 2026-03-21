@@ -299,15 +299,26 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
 
     balls = _build_ball_positions(state)
 
-    # All squares Coily could reach in 1 hop (used by route search and fallback)
+    # All squares Coily could reach in 2 hops. Coily hops every ~24 frames,
+    # Q*bert's hop cycle is ~52 frames, so Coily can make 2 hops per Q*bert hop.
     coily_zone = set()
     if coily:
         coily_zone.add(coily)
         cr, cc = coily
-        for dr, dc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
+        coily_moves = [(-1, -1), (-1, 0), (1, 0), (1, 1)]
+        # 1-hop positions
+        hop1 = []
+        for dr, dc in coily_moves:
             p = (cr + dr, cc + dc)
             if is_valid(p[0], p[1]):
                 coily_zone.add(p)
+                hop1.append(p)
+        # 2-hop positions
+        for r1, c1 in hop1:
+            for dr, dc in coily_moves:
+                p = (r1 + dr, c1 + dc)
+                if is_valid(p[0], p[1]):
+                    coily_zone.add(p)
 
     if debug and coily:
         cd = grid_dist(row, col, coily[0], coily[1])
