@@ -145,7 +145,7 @@ def run(overlay=False):
                     continue
 
                 # Decide action
-                action = decide(state, visited, qbert_prev_known)
+                action = decide(state, visited, qbert_prev_known, debug=True)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
                 if not is_valid(nr, nc):

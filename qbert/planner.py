@@ -168,13 +168,17 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
     for action, nr, nc in neighbors(start[0], start[1]):
         path = [start, (nr, nc)]
 
-        # Simulate Coily for step 1
-        coily_steps = _simulate_coily(coily_pos, coily_target, path, 1)
-        coily_before = coily_steps[0]  # Coily at step 0
-        coily_after = coily_steps[1]   # Coily at step 1
+        # Simulate Coily for 2 steps — Coily can hop twice during Q*bert's
+        # single hop cycle (Coily hops faster: ~24 frames vs Q*bert ~42)
+        coily_steps = _simulate_coily(coily_pos, coily_target, path, 2)
+        coily_0 = coily_steps[0]
+        coily_1 = coily_steps[1] if len(coily_steps) > 1 else None
+        coily_2 = coily_steps[2] if len(coily_steps) > 2 else None
 
-        # Check collision with Coily
-        if _collides_with_coily(start, (nr, nc), coily_before, coily_after):
+        # Check collision with Coily at all intermediate positions
+        if _collides_with_coily(start, (nr, nc), coily_0, coily_1):
+            continue
+        if _collides_with_coily(start, (nr, nc), coily_1, coily_2):
             continue
 
         # Check collision with balls
@@ -184,13 +188,15 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 
         new = 1 if not visited.get((nr, nc), False) else 0
 
-        # Compute Coily distance at this point
+        # Coily distance: use closest of step 1 and step 2 positions
         coily_d = 99
-        if coily_after:
-            coily_d = grid_dist(nr, nc, coily_after[0], coily_after[1])
+        if coily_1:
+            coily_d = min(coily_d, grid_dist(nr, nc, coily_1[0], coily_1[1]))
+        if coily_2:
+            coily_d = min(coily_d, grid_dist(nr, nc, coily_2[0], coily_2[1]))
 
         escape = len(neighbors(nr, nc))
-        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_after))
+        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_2 or coily_1))
         q.append((nr, nc, 1, action, path, new))
 
     while q:
@@ -282,13 +288,8 @@ def _can_escape_coily(qr, qc, coily_pos, coily_target, depth=6):
 # Main decision
 # ---------------------------------------------------------------------------
 
-def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
-    """Pick the best action by searching safe multi-hop routes.
-
-    qbert_prev_known: Q*bert's position before the last hop, tracked by the
-    game loop in Python. More reliable than state.qbert_prev from RAM which
-    can be stale due to read timing.
-    """
+def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) -> int:
+    """Pick the best action by searching safe multi-hop routes."""
     row, col = state.qbert
     if not is_valid(row, col):
         return DOWN
@@ -297,10 +298,8 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
     if not valid:
         return DOWN
 
-    # Use Python-tracked prev if available, fall back to RAM
     qb_prev = qbert_prev_known if qbert_prev_known else state.qbert_prev
 
-    # Find Coily — use etype not going_up, since Coily can be stationary
     coily = None
     coily_target = None
     for e in state.enemies:
@@ -313,10 +312,28 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None) -> int:
 
     balls = _build_ball_positions(state)
 
-    # Search for safe routes
+    if debug and coily:
+        cd = grid_dist(row, col, coily[0], coily[1])
+        if cd <= 3:
+            print(f"    DBG: Q@({row},{col}) prev={qb_prev} coily={coily} "
+                  f"target={coily_target} d={cd} "
+                  f"enemies=[{', '.join(f'{e.etype}@{e.pos}' for e in state.enemies)}]")
+
     routes = _find_safe_routes(
         (row, col), coily, coily_target, balls, visited, max_depth=7
     )
+
+    if debug and coily and grid_dist(row, col, coily[0], coily[1]) <= 3:
+        if not routes:
+            print(f"    DBG: NO SAFE ROUTES — using fallback")
+        else:
+            for a in set(r[0] for r in routes):
+                best = max((r for r in routes if r[0] == a),
+                           key=lambda r: r[1] * 200 + r[2] * 30 + r[4] * 15)
+                dr, dc = MOVE_DELTAS[a]
+                dest = (row + dr, col + dc)
+                print(f"    DBG: {MOVE_NAMES[a]}→{dest} cubes={best[1]} "
+                      f"esc={best[2]} coily_d={best[4]}")
 
     if not routes:
         # No safe routes — avoid immediate dangers at minimum
