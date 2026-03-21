@@ -297,7 +297,7 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 coily_target = state.qbert
             break
 
-    # DISC STRATEGY: use disc only if Coily will follow Q*bert off the edge.
+    # Use disc only if Coily will follow Q*bert off the edge.
     # Simulate Coily chasing Q*bert to the disc position. Coily must reach
     # the disc edge within a few hops (meaning it will jump off and die).
     if coily and coily_target:

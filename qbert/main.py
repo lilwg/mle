@@ -64,6 +64,7 @@ def run(overlay=False):
                 print(f"  Start attempt {attempt + 1} failed, retrying...")
 
             tracker.reset()
+            used_discs = set()  # track which discs we've used (by side)
             prev_lives = state.lives
             prev_score = state.score_byte
             total_score = 0
@@ -163,6 +164,9 @@ def run(overlay=False):
                         stuck_count = 0
                     continue
 
+                # Filter out used discs before deciding
+                state.discs = [d for d in state.discs if d.side not in used_discs]
+
                 # Decide action
                 action = decide(state, visited, qbert_prev_known)
                 dr, dc = MOVE_DELTAS[action]
@@ -170,19 +174,21 @@ def run(overlay=False):
 
                 # Check if this is a disc jump (intentionally off pyramid)
                 is_disc_jump = False
+                disc_used = None
                 for disc in state.discs:
                     if pos == disc.jump_from and action == disc.direction:
                         is_disc_jump = True
+                        disc_used = disc
                         break
 
                 if is_disc_jump:
-                    # Execute disc jump — long wait for ride animation
                     port, field = MOVE_BUTTONS[action]
                     qbert_prev_known = pos
                     env.step_n(port, field, BUTTON_HOLD)
                     data = env.wait(300)
                     tracker.reset()
                     qbert_prev_known = None
+                    used_discs.add(disc_used.side)
                     state = read_state(data, tracker)
                     pos = state.qbert
                     if is_valid(pos[0], pos[1]):
@@ -282,6 +288,7 @@ def run(overlay=False):
                     visited = {}
                     jumps = 0
                     stuck_count = 0
+                    used_discs = set()
                     # Wait for level transition animation
                     env.wait(600)
                     # Reset tracker and read frames until Q*bert is valid
