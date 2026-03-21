@@ -147,7 +147,7 @@ def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
 # Route search
 # ---------------------------------------------------------------------------
 
-def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_depth=7, debug=False):
+def _find_safe_routes(qbert_pos, coily_pos, coily_target, coily_zone, balls, visited, max_depth=7, debug=False):
     """BFS to find routes that don't collide with any enemy.
 
     At each step, simulates Coily's chase and ball bounces, checking the
@@ -164,18 +164,6 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
     # For the BFS we need per-path Coily simulation — do it inline.
 
     q = deque()
-
-    # Build set of ALL squares Coily could reach in 1 hop.
-    # Coily has 4 possible moves: UP-LEFT, UP-RIGHT, DOWN-LEFT, DOWN-RIGHT.
-    # We don't know which one it'll pick (prediction is unreliable), so block all.
-    coily_zone = set()
-    if coily_pos:
-        coily_zone.add(coily_pos)  # current position
-        cr, cc = coily_pos
-        for dr, dc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
-            p = (cr + dr, cc + dc)
-            if is_valid(p[0], p[1]):
-                coily_zone.add(p)
 
     for action, nr, nc in neighbors(start[0], start[1]):
         # Block any move into Coily's reach zone
@@ -311,6 +299,16 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
 
     balls = _build_ball_positions(state)
 
+    # All squares Coily could reach in 1 hop (used by route search and fallback)
+    coily_zone = set()
+    if coily:
+        coily_zone.add(coily)
+        cr, cc = coily
+        for dr, dc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
+            p = (cr + dr, cc + dc)
+            if is_valid(p[0], p[1]):
+                coily_zone.add(p)
+
     if debug and coily:
         cd = grid_dist(row, col, coily[0], coily[1])
         if cd <= 3:
@@ -319,7 +317,7 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                   f"enemies=[{', '.join(f'{e.etype}@{e.pos}' for e in state.enemies)}]")
 
     routes = _find_safe_routes(
-        (row, col), coily, coily_target, balls, visited, max_depth=7,
+        (row, col), coily, coily_target, coily_zone, balls, visited, max_depth=7,
         debug=debug and coily is not None and grid_dist(row, col, coily[0], coily[1]) <= 3
     )
 
