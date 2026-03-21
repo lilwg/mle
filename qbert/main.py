@@ -18,8 +18,10 @@ ROMS_PATH = "/Users/pat/mame/roms"
 
 # Timing constants (in frames, 1 frame per step)
 # Old MAMEToolkit used frame_ratio=3: 4 steps * 3 = 12 frames hold, 10 * 3 = 30 wait
-BUTTON_HOLD = 12   # frames to hold a direction button
-HOP_WAIT = 40      # frames to wait after releasing for hop to complete
+# Measured: grid word updates immediately. Q*bert needs ~30 frames for full
+# hop cycle. Button must be held long enough to register reliably.
+BUTTON_HOLD = 6    # reliable input registration
+HOP_WAIT = 24      # total ~30 frames per hop (faster than Coily's ~29)
 
 
 def run(overlay=False):

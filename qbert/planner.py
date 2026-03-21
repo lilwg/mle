@@ -312,8 +312,9 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 return disc.direction
 
     balls = _build_ball_positions(state)
-    # A spawn is imminent if countdown < 60 frames (Q*bert's hop takes ~52)
-    spawn_imminent = state.spawn_countdown < 60
+    # Spawn at (1,0)/(1,1) happens when $0085 countdown hits 0.
+    # With Q*bert hopping in ~22 frames, avoid spawn points when countdown < 25.
+    spawn_imminent = state.spawn_countdown < 25
 
     # All squares Coily could reach in 1 hop (current pos + 4 possible moves)
     coily_zone = set()
