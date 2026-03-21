@@ -78,8 +78,13 @@ def _ball_positions_at_step(balls, step):
 
     Includes both the ball's position AND its previous position
     (mid-hop collision, matching ROM $BD1E logic).
+    Also includes spawn points (1,0) and (1,1) — balls can appear
+    there at any time.
     """
     positions = set()
+    # Spawn points are always dangerous — a new ball can appear any frame
+    positions.add((1, 0))
+    positions.add((1, 1))
     for cur, path in balls:
         if step == 0:
             positions.add(cur)
@@ -89,7 +94,6 @@ def _ball_positions_at_step(balls, step):
                 p = path[idx]
                 if is_valid(p[0], p[1]):
                     positions.add(p)
-                # Previous position too (mid-hop)
                 prev = path[idx - 1] if idx >= 1 else cur
                 if is_valid(prev[0], prev[1]):
                     positions.add(prev)
