@@ -70,10 +70,10 @@ def run(overlay=False):
             prev_lives = state.lives
             jumps = 0
             level = 1
-            ram_cubes_valid = False
             visited = {}
             stuck_count = 0
             prev_pos = None
+            qbert_prev_known = None
             pos = state.qbert
 
             print(f"\n--- Episode {episode}, Level {level} ---")
@@ -83,23 +83,8 @@ def run(overlay=False):
                 state = read_state(data, tracker)
                 lives = state.lives
 
-                # Build visited from RAM cube states.
-                # Cube states may be stale from attract mode at game start.
-                # Only trust RAM after remaining_cubes has been seen at 28
-                # (indicating a fresh level reset).
-                if state.remaining_cubes >= 27:
-                    ram_cubes_valid = True
-                if ram_cubes_valid:
-                    visited = {}
-                    for ci in range(NUM_CUBES):
-                        if state.cube_states[ci] == state.target_color:
-                            visited[cube_index_to_pos(ci)] = True
-                else:
-                    # Trust Python-tracked visited until RAM stabilizes
-                    pos = state.qbert
-                    if is_valid(pos[0], pos[1]):
-                        visited[pos] = True
-                cubes = NUM_CUBES - state.remaining_cubes if ram_cubes_valid else len(visited)
+                # Use remaining_cubes from RAM for cube count (works all levels)
+                cubes = NUM_CUBES - state.remaining_cubes
 
                 # Death check: lives decreased OR Q*bert is on same square as Coily
                 # (game may kill Q*bert before the lives byte updates in RAM)
@@ -132,6 +117,7 @@ def run(overlay=False):
                         break
                     prev_lives = lives
                     tracker.reset()
+                    qbert_prev_known = None
                     data = env.wait(300)
                     state = read_state(data, tracker)
                     pos = state.qbert
@@ -161,6 +147,7 @@ def run(overlay=False):
                     if valid:
                         act = random.choice(valid)[0]
                         port, field = MOVE_BUTTONS[act]
+                        qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
                         data = env.wait(HOP_WAIT)
                         stuck_count = 0
@@ -170,7 +157,7 @@ def run(overlay=False):
                 state.discs = [d for d in state.discs if d.side not in used_discs]
 
                 # Decide action
-                action = decide(state, visited)
+                action = decide(state, visited, qbert_prev_known)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
 
@@ -185,9 +172,11 @@ def run(overlay=False):
 
                 if is_disc_jump:
                     port, field = MOVE_BUTTONS[action]
+                    qbert_prev_known = pos
                     env.step_n(port, field, BUTTON_HOLD)
                     data = env.wait(300)
                     tracker.reset()
+                    qbert_prev_known = None
                     used_discs.add(disc_used.side)
                     state = read_state(data, tracker)
                     new_pos = state.qbert
@@ -240,15 +229,22 @@ def run(overlay=False):
                         # else: all moves are in the zone, no override possible
 
 
-                # Execute jump. Press direction briefly to start the hop.
-                # The grid word updates immediately. The game queues the next
-                # direction input while Q*bert is mid-hop, so we can start
-                # pressing the next direction as soon as we've decided.
+                # Track Q*bert's position before hopping
+                qbert_prev_known = pos
+
+                # Execute jump, then wait for full animation cycle
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                # Wait just enough for the grid word to update and Q*bert
-                # to be ready for the next queued input
-                data = env.wait(18 - BUTTON_HOLD)
+                # Phase 1: wait for hop to START (anim drops below 16)
+                for _ in range(20):
+                    data = env.step()
+                    if data.get("qb_anim", 16) < 16:
+                        break
+                # Phase 2: wait for hop to COMPLETE (anim returns >= 16)
+                for _ in range(40):
+                    data = env.step()
+                    if data.get("qb_anim", 0) >= 16:
+                        break
                 jumps += 1
 
                 # Update position

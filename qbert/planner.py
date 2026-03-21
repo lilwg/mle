@@ -279,7 +279,7 @@ def _can_escape_coily(qr, qc, coily_pos, coily_target, depth=6):
 # Main decision
 # ---------------------------------------------------------------------------
 
-def decide(state: GameState, visited: dict, debug=False) -> int:
+def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) -> int:
     """Pick the best action by searching safe multi-hop routes."""
     row, col = state.qbert
     if not is_valid(row, col):
@@ -289,13 +289,14 @@ def decide(state: GameState, visited: dict, debug=False) -> int:
     if not valid:
         return DOWN
 
-    # Use RAM qbert_prev directly — this is exactly what Coily chases
+    # Use Python-tracked prev if available (set at known time), fall back to RAM
+    qb_prev = qbert_prev_known if qbert_prev_known else state.qbert_prev
     coily = None
     coily_target = None
     for e in state.enemies:
         if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
             coily = e.pos
-            coily_target = state.qbert_prev
+            coily_target = qb_prev
             if coily == coily_target:
                 coily_target = state.qbert
             break
