@@ -301,32 +301,16 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 coily_target = state.qbert
             break
 
-    # Use disc only if Coily will follow Q*bert off the edge.
-    # Simulate Coily chasing Q*bert to the disc position. Coily must reach
-    # the disc edge within a few hops (meaning it will jump off and die).
-    if coily and coily_target:
+    # Use disc only if Coily is close enough to follow and die.
+    # Coily must be within 2 hops of the disc position — close enough
+    # that it will chase Q*bert off the edge during the disc ride.
+    if coily:
+        coily_d = grid_dist(row, col, coily[0], coily[1])
         for disc in state.discs:
             if (row, col) != disc.jump_from:
                 continue
-            # Simulate: Q*bert jumps off. Coily chases Q*bert's last position
-            # (the disc jump_from position). Will Coily reach that edge?
-            cr, cc = coily
-            target = coily_target
-            will_follow = False
-            for step in range(6):
-                nr, nc = predict_coily(cr, cc, target[0], target[1])
-                # After first hop, Coily chases the disc jump position
-                target = disc.jump_from
-                if not is_valid(nr, nc):
-                    # Coily went off the pyramid — it will die!
-                    will_follow = True
-                    break
-                cr, cc = nr, nc
-                if (cr, cc) == disc.jump_from:
-                    # Coily reached the edge — next hop it follows Q*bert off
-                    will_follow = True
-                    break
-            if will_follow:
+            # Only use disc if Coily is very close (will follow off edge)
+            if coily_d <= 2:
                 return disc.direction
 
     balls = _build_ball_positions(state)

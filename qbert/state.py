@@ -17,8 +17,9 @@ QBERT_RAM = {
     "disc1_avail": 0x0D4D,
     "disc0_row": 0x0D4E,
     "disc1_row": 0x0D51,
-    # Spawn timer: $0085 counts down each frame, spawn happens at 0
-    "spawn_countdown": 0x0085,
+    # Spawn timer: $0085-$0086 is 16-bit countdown, spawn happens at 0
+    "spawn_cd_lo": 0x0085,
+    "spawn_cd_hi": 0x0086,
 }
 
 for _n in range(10):
@@ -199,5 +200,5 @@ def read_state(data, tracker=None):
         enemies=enemies, discs=discs,
         lives=data.get("lives", 0),
         score_byte=data.get("score", 0),
-        spawn_countdown=data.get("spawn_countdown", 0),
+        spawn_countdown=data.get("spawn_cd_lo", 0) | (data.get("spawn_cd_hi", 0) << 8),
     )
