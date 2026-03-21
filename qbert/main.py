@@ -19,7 +19,7 @@ ROMS_PATH = "/Users/pat/mame/roms"
 # Timing constants (in frames, 1 frame per step)
 # Old MAMEToolkit used frame_ratio=3: 4 steps * 3 = 12 frames hold, 10 * 3 = 30 wait
 BUTTON_HOLD = 12   # frames to hold a direction button
-HOP_WAIT = 30      # frames to wait after releasing for hop to complete
+HOP_WAIT = 40      # frames to wait after releasing for hop to complete
 
 
 def run(overlay=False):
