@@ -180,7 +180,7 @@ def run(overlay=False):
                     port, field = MOVE_BUTTONS[action]
                     qbert_prev_known = pos
                     env.step_n(port, field, BUTTON_HOLD)
-                    data = env.wait(300)  # disc ride takes ~5 seconds
+                    data = env.wait(300)
                     tracker.reset()
                     qbert_prev_known = None
                     state = read_state(data, tracker)
@@ -191,6 +191,16 @@ def run(overlay=False):
                     stuck_count = 0
                     jumps += 1
                     print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
+                    # Immediately hop away from (0,0) — balls spawn there
+                    if pos == (0, 0):
+                        env.step_n(":IN4", "P1 Down (Down-Left)", BUTTON_HOLD)
+                        data = env.wait(HOP_WAIT)
+                        state = read_state(data, tracker)
+                        pos = state.qbert
+                        if is_valid(pos[0], pos[1]):
+                            visited[pos] = True
+                        qbert_prev_known = (0, 0)
+                        jumps += 1
                     continue
 
                 if not is_valid(nr, nc):
