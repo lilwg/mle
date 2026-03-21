@@ -191,16 +191,8 @@ def run(overlay=False):
                     stuck_count = 0
                     jumps += 1
                     print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
-                    # Immediately hop away from (0,0) — balls spawn there
-                    if pos == (0, 0):
-                        env.step_n(":IN4", "P1 Down (Down-Left)", BUTTON_HOLD)
-                        data = env.wait(HOP_WAIT)
-                        state = read_state(data, tracker)
-                        pos = state.qbert
-                        if is_valid(pos[0], pos[1]):
-                            visited[pos] = True
-                        qbert_prev_known = (0, 0)
-                        jumps += 1
+                    # Let the normal planner handle the next move
+                    # (it will see any balls and avoid them)
                     continue
 
                 if not is_valid(nr, nc):
