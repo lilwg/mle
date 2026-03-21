@@ -129,6 +129,11 @@ def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
       3. Q*bert previous vs Enemy current (enemy lands where Q*bert was)
 
     Since both hop simultaneously, "current" = after hop, "previous" = before hop.
+
+    Also blocks moves to any square adjacent to Coily's current position,
+    because our Coily direction prediction can be wrong (stale qbert_prev
+    from RAM read timing) — if Coily is 1 hop away, any of its 4 neighbors
+    could be where it actually goes.
     """
     if coily_before is None and coily_after is None:
         return False
@@ -140,6 +145,12 @@ def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
         return True
     # Q*bert's pre-hop position vs Coily destination (swap/crossing)
     if coily_after and qbert_from == coily_after:
+        return True
+    # Safety margin: if Q*bert is jumping to a square adjacent to Coily,
+    # Coily could go ANY direction — our prediction might be wrong due to
+    # stale qbert_prev. Block all neighbors of Coily's current position.
+    if coily_before and grid_dist(qbert_to[0], qbert_to[1],
+                                   coily_before[0], coily_before[1]) <= 1:
         return True
     return False
 
