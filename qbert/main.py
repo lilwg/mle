@@ -162,7 +162,10 @@ def run(overlay=False):
                         port, field = MOVE_BUTTONS[act]
                         qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
-                        data = env.wait(HOP_WAIT)
+                        for _ in range(50):
+                            data = env.step()
+                            if data.get("qb_anim", 0) >= 16:
+                                break
                         stuck_count = 0
                     continue
 
@@ -244,10 +247,15 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump
+                # Execute jump, then wait until Q*bert's animation is done
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                data = env.wait(HOP_WAIT)
+                # Wait for hop animation to complete (anim counter >= 16 = ready)
+                for _ in range(50):
+                    data = env.step()
+                    anim = data.get("qb_anim", 0)
+                    if anim >= 16:
+                        break
                 jumps += 1
 
                 # Update position

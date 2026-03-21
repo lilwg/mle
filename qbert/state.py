@@ -19,6 +19,8 @@ QBERT_RAM = {
     "disc1_row": 0x0D51,
     # Spawn timer: $0085 is 8-bit countdown, spawn happens at 0, reloads from $0D17
     "spawn_countdown": 0x0085,
+    # Q*bert animation counter: 0 = mid-hop, >= 16 = ready for next hop
+    "qb_anim": 0x0D5F,
 }
 
 for _n in range(10):
