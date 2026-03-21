@@ -77,8 +77,33 @@ class EnemyTracker:
             # New spawn — reset vote counter
             self._flags_votes[slot] = Counter()
         if active:
+            # If we see a flags value that contradicts the current majority,
+            # and it's a different enemy class, reset votes. This catches the
+            # purple ball → Coily hatch: flags change from 0x22 to 0x60 but
+            # the slot never goes inactive.
+            votes = self._flags_votes.get(slot)
+            if votes:
+                current_top = votes.most_common(1)[0][0]
+                if self._is_different_class(current_top, flags):
+                    self._flags_votes[slot] = Counter()
             self._flags_votes[slot][flags] += 1
         self._was_active[slot] = active
+
+    @staticmethod
+    def _is_different_class(flags_a, flags_b):
+        """Check if two flags values represent different enemy classes."""
+        coily_flags = {0x60, 0x58, 0x68}
+        ball_flags = {0x22}
+        a_coily = flags_a in coily_flags
+        b_coily = flags_b in coily_flags
+        a_ball = flags_a in ball_flags
+        b_ball = flags_b in ball_flags
+        # Different if one is ball and other is coily
+        if a_ball and b_coily:
+            return True
+        if a_coily and b_ball:
+            return True
+        return False
 
     def get_type(self, slot):
         """Return (etype, harmless) based on accumulated flags votes."""
