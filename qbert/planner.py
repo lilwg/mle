@@ -1,8 +1,8 @@
-"""Q*bert move planner. Three modes: EXPLORE, EVADE, FINISH."""
+"""Q*bert move planner. Prioritizes corners/edges early, uses full ball paths."""
 
 from collections import deque
 from qbert.state import is_valid, MAX_ROW, NUM_CUBES, GameState, Enemy
-from qbert.predict import predict_coily, predict_coily_n, predict_ball_next
+from qbert.predict import predict_coily, predict_coily_n, predict_ball_next, predict_ball_path
 
 # Directions: action index → (delta_row, delta_col)
 UP    = 0  # Up-Right on screen: (-1, 0) in grid
@@ -58,10 +58,11 @@ def nearest_unvisited(row, col, visited):
 
 
 def get_dangers(state: GameState):
-    """Compute dangerous positions and identify Coily."""
+    """Compute dangerous positions using full ball paths and Coily prediction."""
     dangers = set()
+    ball_danger_times = {}
     coily = None
-    coily_target = None  # what Coily is chasing
+    coily_target = None
 
     for enemy in state.enemies:
         if enemy.harmless:
@@ -70,21 +71,17 @@ def get_dangers(state: GameState):
         if not is_valid(pos[0], pos[1]):
             continue
 
-        # Current and previous positions are dangerous (mid-hop catch)
         dangers.add(pos)
         if is_valid(enemy.prev_pos[0], enemy.prev_pos[1]):
             dangers.add(enemy.prev_pos)
 
         if enemy.going_up:
-            # Coily — predict future positions
             coily = pos
-            # Coily chases Q*bert's PREVIOUS position
             target = state.qbert_prev
             if coily == target:
-                target = state.qbert  # fallback to current
+                target = state.qbert
             coily_target = target
 
-            # Predict 1 and 2 hops ahead
             c1 = predict_coily(pos[0], pos[1], target[0], target[1])
             if is_valid(c1[0], c1[1]):
                 dangers.add(c1)
@@ -92,15 +89,18 @@ def get_dangers(state: GameState):
                 if is_valid(c2[0], c2[1]):
                     dangers.add(c2)
         else:
-            # Ball — predict next bounce
-            ball_next = predict_ball_next(pos[0], pos[1], enemy.direction_bits)
-            if is_valid(ball_next[0], ball_next[1]):
-                dangers.add(ball_next)
+            path = predict_ball_path(pos[0], pos[1], enemy.direction_bits)
+            for i, fp in enumerate(path):
+                if not is_valid(fp[0], fp[1]):
+                    break
+                dangers.add(fp)
+                if fp not in ball_danger_times or i < ball_danger_times[fp]:
+                    ball_danger_times[fp] = i
 
-    return dangers, coily, coily_target
+    return dangers, coily, coily_target, ball_danger_times
 
 
-def sim_score(qr, qc, coily_pos, visited, depth, max_depth=4):
+def sim_score(qr, qc, coily_pos, visited, depth, max_depth=3):
     """Simulate Q*bert + Coily lookahead. Returns a heuristic score."""
     if depth >= max_depth:
         if coily_pos and is_valid(coily_pos[0], coily_pos[1]):
@@ -122,7 +122,7 @@ def sim_score(qr, qc, coily_pos, visited, depth, max_depth=4):
             if not is_valid(next_coily[0], next_coily[1]):
                 next_coily = None
             elif next_coily == (nr, nc):
-                continue  # would be caught
+                continue
 
         s = 0
         if not visited.get((nr, nc), False):
@@ -142,16 +142,17 @@ def sim_score(qr, qc, coily_pos, visited, depth, max_depth=4):
 def decide(state: GameState, visited: dict) -> int:
     """Pick the best action given current state. Returns action index (0-3).
 
-    Three modes:
-    - EXPLORE: no nearby enemies → BFS to nearest unvisited
-    - EVADE: Coily within 4 → lookahead simulation
-    - FINISH: ≤3 cubes left → rush remaining cubes when safe
+    Strategy:
+    - When Coily is far (dist > 5) or absent: visit cubes, prefer corners/edges
+    - When Coily is near (dist <= 5): prioritize escape + distance from Coily
+    - Never enter dead ends when Coily is within 5
+    - Always use full ball path predictions for danger
     """
     row, col = state.qbert
     if not is_valid(row, col):
         return DOWN
 
-    dangers, coily, coily_target = get_dangers(state)
+    dangers, coily, coily_target, ball_times = get_dangers(state)
     remaining = NUM_CUBES - sum(1 for v in visited.values() if v)
 
     valid = neighbors(row, col)
@@ -159,53 +160,74 @@ def decide(state: GameState, visited: dict) -> int:
         return DOWN
 
     coily_dist = grid_dist(row, col, coily[0], coily[1]) if coily else 99
+    evading = coily_dist <= 5
 
     scored = []
     for action, nr, nc in valid:
-        # HARD BLOCK: never jump to a dangerous square
         if (nr, nc) in dangers:
             scored.append((-1000, action))
             continue
 
         score = 0.0
-
-        # New cube bonus — increases as completion approaches
-        if not visited.get((nr, nc), False):
-            score += 50 + max(0, (28 - remaining)) * 5
-
-        # Escape route analysis
+        is_new = not visited.get((nr, nc), False)
         escape = len(neighbors(nr, nc))
+        nd = grid_dist(nr, nc, coily[0], coily[1]) if coily else 99
 
-        if coily:
-            nd = grid_dist(nr, nc, coily[0], coily[1])
-            # Dead-end avoidance when Coily is close
-            if escape <= 1 and coily_dist <= 4:
-                score -= 200
-            elif escape <= 1:
-                score -= 10
-            elif escape <= 2 and coily_dist <= 3:
-                score -= 20
+        if evading:
+            # EVADE MODE: survival first, cubes are a bonus
+            # Distance from Coily is the primary objective
+            score += nd * 15
 
-            # Coily prediction + distance scoring
+            # Escape routes: critical when Coily is near
+            if escape <= 1:
+                score -= 500  # never enter dead ends while evading
+            elif escape <= 2:
+                score -= 50
+            score += escape * 10  # more exits = better
+
+            # Coily prediction
             if coily_target and is_valid(coily[0], coily[1]):
                 c1 = predict_coily(coily[0], coily[1], coily_target[0], coily_target[1])
                 if is_valid(c1[0], c1[1]):
                     if c1 == (nr, nc):
+                        score -= 200
+                    else:
+                        score += grid_dist(nr, nc, c1[0], c1[1]) * 5
+
+            # Lookahead
+            score += sim_score(nr, nc, coily, visited, 1) * 0.8
+
+            # Still grab new cubes if it doesn't compromise safety
+            if is_new and nd > coily_dist:
+                score += 30
+
+        else:
+            # EXPLORE MODE: Coily is far or absent — visit cubes aggressively
+            if is_new:
+                base = 50 + max(0, (28 - remaining)) * 5
+                # Bonus for corners/edges — get them while it's safe
+                if escape <= 1:
+                    # Corner: only if no ball arriving soon
+                    ball_threat = ball_times.get((nr, nc), 99)
+                    if ball_threat <= 2:
                         score -= 100
                     else:
-                        score += grid_dist(nr, nc, c1[0], c1[1]) * 3
+                        score += base + 120  # big bonus: grab corners early!
+                elif escape <= 2:
+                    score += base + 40  # edges get bonus too
+                else:
+                    score += base
+            else:
+                if escape <= 1:
+                    score -= 50  # don't re-enter dead ends
 
-            # Lookahead simulation
-            score += sim_score(nr, nc, coily, visited, 1) * 0.6
-        else:
-            if escape <= 1:
-                score -= 10
-
-        # BFS pull toward unvisited cubes
-        _, d_before = nearest_unvisited(row, col, visited)
-        _, d_after = nearest_unvisited(nr, nc, visited)
-        if d_after < d_before:
-            score += 15
+            # BFS toward nearest unvisited
+            _, d_before = nearest_unvisited(row, col, visited)
+            _, d_after = nearest_unvisited(nr, nc, visited)
+            if d_after < d_before:
+                score += 20
+            elif d_after > d_before:
+                score -= 5
 
         scored.append((score, action))
 
