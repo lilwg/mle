@@ -190,15 +190,20 @@ def run(overlay=False):
                     qbert_prev_known = None
                     used_discs.add(disc_used.side)
                     state = read_state(data, tracker)
-                    pos = state.qbert
-                    if is_valid(pos[0], pos[1]):
+                    new_pos = state.qbert
+                    if new_pos == (0, 0) or new_pos == (-1, -1):
+                        # Disc ride succeeded
+                        pos = new_pos if is_valid(new_pos[0], new_pos[1]) else (0, 0)
                         visited[pos] = True
+                        jumps += 1
+                        print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
+                    else:
+                        # Disc was already used — Q*bert jumped off pyramid
+                        # This is a death, handle in next iteration
+                        pos = new_pos
+                        jumps += 1
                     prev_pos = None
                     stuck_count = 0
-                    jumps += 1
-                    print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
-                    # Let the normal planner handle the next move
-                    # (it will see any balls and avoid them)
                     continue
 
                 if not is_valid(nr, nc):

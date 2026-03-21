@@ -301,16 +301,14 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 coily_target = state.qbert
             break
 
-    # Use disc only if Coily is close enough to follow and die.
-    # Coily must be within 2 hops of the disc position — close enough
-    # that it will chase Q*bert off the edge during the disc ride.
+    # Use disc when Coily is within 1 hop — escape to (0,0).
+    # Coily may or may not die, but Q*bert survives.
     if coily:
         coily_d = grid_dist(row, col, coily[0], coily[1])
         for disc in state.discs:
             if (row, col) != disc.jump_from:
                 continue
-            # Only use disc if Coily is very close (will follow off edge)
-            if coily_d <= 2:
+            if coily_d <= 1:
                 return disc.direction
 
     balls = _build_ball_positions(state)
@@ -373,15 +371,17 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 best_action = action
         return best_action
 
-    # When Coily is active, find nearest disc to route toward
+    # When Coily is close, route toward nearest disc as escape
     disc_target = None
     if coily and state.discs:
-        best_disc_dist = 999
-        for disc in state.discs:
-            d = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
-            if d < best_disc_dist:
-                best_disc_dist = d
-                disc_target = disc.jump_from
+        coily_d = grid_dist(row, col, coily[0], coily[1])
+        if coily_d <= 4:
+            best_dd = 999
+            for disc in state.discs:
+                dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+                if dd < best_dd:
+                    best_dd = dd
+                    disc_target = disc.jump_from
 
     # Score each first_action by its best route
     action_scores = {}
