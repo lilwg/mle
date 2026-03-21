@@ -165,18 +165,21 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 
     q = deque()
 
+    # Build set of ALL squares Coily could reach in 1 hop.
+    # Coily has 4 possible moves: UP-LEFT, UP-RIGHT, DOWN-LEFT, DOWN-RIGHT.
+    # We don't know which one it'll pick (prediction is unreliable), so block all.
+    coily_zone = set()
+    if coily_pos:
+        coily_zone.add(coily_pos)  # current position
+        cr, cc = coily_pos
+        for dr, dc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
+            p = (cr + dr, cc + dc)
+            if is_valid(p[0], p[1]):
+                coily_zone.add(p)
+
     for action, nr, nc in neighbors(start[0], start[1]):
-        path = [start, (nr, nc)]
-
-        # Simulate Coily for 1 step (1:1 hop ratio with Q*bert)
-        coily_steps = _simulate_coily(coily_pos, coily_target, path, 1)
-        coily_0 = coily_steps[0]
-        coily_1 = coily_steps[1] if len(coily_steps) > 1 else None
-
-        # Check collision with Coily
-        if _collides_with_coily(start, (nr, nc), coily_0, coily_1):
-            if debug:
-                print(f"    DBG-BLOCK: {start}→{(nr,nc)} coily={coily_0}→{coily_1}")
+        # Block any move into Coily's reach zone
+        if (nr, nc) in coily_zone:
             continue
 
         # Check collision with balls
