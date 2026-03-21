@@ -1,12 +1,10 @@
 """Q*bert game state reader. All RAM addresses ROM-verified (see GAME_STATE_MAP.md)."""
 
-from collections import Counter
 from dataclasses import dataclass, field
 
 MAX_ROW = 6
 NUM_CUBES = 28
 
-# RAM addresses — simple dict, no Address class needed
 QBERT_RAM = {
     "lives": 0x0D00,
     "score": 0x00BE,
@@ -16,130 +14,74 @@ QBERT_RAM = {
     "qb_prev1": 0x0D69,
 }
 
-# Enemy slots: 10 slots at $0D70 + n*22, various offsets
 for _n in range(10):
     _base = 0x0D70 + _n * 22
-    QBERT_RAM[f"e{_n}_st"] = _base          # +0: state byte
-    QBERT_RAM[f"e{_n}_flags"] = _base + 10   # +10: type flags
-    QBERT_RAM[f"e{_n}_anim"] = _base + 11    # +11: animation counter
-    QBERT_RAM[f"e{_n}_dir"] = _base + 14     # +14: direction bits
-    QBERT_RAM[f"e{_n}_gw0"] = _base + 18     # +18: current grid word byte 0
-    QBERT_RAM[f"e{_n}_gw1"] = _base + 19     # +19: current grid word byte 1
-    QBERT_RAM[f"e{_n}_pw0"] = _base + 20     # +20: previous grid word byte 0
-    QBERT_RAM[f"e{_n}_pw1"] = _base + 21     # +21: previous grid word byte 1
+    QBERT_RAM[f"e{_n}_st"] = _base
+    QBERT_RAM[f"e{_n}_flags"] = _base + 10
+    QBERT_RAM[f"e{_n}_anim"] = _base + 11
+    QBERT_RAM[f"e{_n}_dir"] = _base + 14
+    QBERT_RAM[f"e{_n}_gw0"] = _base + 18
+    QBERT_RAM[f"e{_n}_gw1"] = _base + 19
+    QBERT_RAM[f"e{_n}_pw0"] = _base + 20
+    QBERT_RAM[f"e{_n}_pw1"] = _base + 21
 
 
 @dataclass
 class Enemy:
     slot: int
-    pos: tuple  # (row, col)
+    pos: tuple
     prev_pos: tuple
     direction_bits: int
     anim: int
     flags: int
     state: int
-    going_up: bool  # True = Coily behavior, False = ball behavior
-    harmless: bool   # True = Sam/Slick
-    etype: str       # "coily", "ball", "sam", "ugg", "unknown"
+    going_up: bool
+    harmless: bool
+    etype: str  # "coily", "ball", "unknown"
 
 
 @dataclass
 class GameState:
-    qbert: tuple          # (row, col) current position
-    qbert_prev: tuple     # (row, col) previous position (Coily chases this)
+    qbert: tuple
+    qbert_prev: tuple
     enemies: list = field(default_factory=list)
     lives: int = 0
     score_byte: int = 0
 
 
 class EnemyTracker:
-    """Tracks per-slot flags across frames to determine reliable enemy types.
+    """Tracks whether each slot has ever gone up (= Coily).
 
-    The flags byte (offset+10) can read incorrectly on any single frame due to
-    mid-update reads. By accumulating values across frames and voting, we get
-    the true value that was set at spawn time.
-
-    Known flags from ROM:
-        0x60 = Coily (deadly, chases Q*bert)
-        0x22 = Red ball (deadly, bounces down)
-        0x58 = Coily variant
-    Collision code at $BD1E: flags & 0x06 >= 4 → harmless (Sam/Slick)
+    Purple ball bounces down for 7 hops then hatches into Coily which goes up.
+    Once we see a slot go up, it's Coily until the slot goes inactive.
+    No flags byte needed — pure behavior.
     """
 
     def __init__(self):
-        self._was_active = {}   # slot -> bool
-        self._flags_votes = {}  # slot -> Counter
+        self._was_active = {}
+        self._is_coily = {}
 
-    def update(self, slot, active, flags):
-        """Call once per frame per slot with current state."""
-        was = self._was_active.get(slot, False)
-        if active and not was:
-            # New spawn — reset vote counter
-            self._flags_votes[slot] = Counter()
-        if active:
-            # If we see a flags value that contradicts the current majority,
-            # and it's a different enemy class, reset votes. This catches the
-            # purple ball → Coily hatch: flags change from 0x22 to 0x60 but
-            # the slot never goes inactive.
-            votes = self._flags_votes.get(slot)
-            if votes:
-                current_top = votes.most_common(1)[0][0]
-                if self._is_different_class(current_top, flags):
-                    self._flags_votes[slot] = Counter()
-            self._flags_votes[slot][flags] += 1
+    def update(self, slot, active, pos, prev_pos):
+        if active and not self._was_active.get(slot, False):
+            self._is_coily[slot] = False
+        if active and is_valid(pos[0], pos[1]) and is_valid(prev_pos[0], prev_pos[1]):
+            if pos[0] < prev_pos[0]:
+                self._is_coily[slot] = True
         self._was_active[slot] = active
 
-    @staticmethod
-    def _is_different_class(flags_a, flags_b):
-        """Check if two flags values represent different enemy classes."""
-        coily_flags = {0x60, 0x58, 0x68}
-        ball_flags = {0x22}
-        a_coily = flags_a in coily_flags
-        b_coily = flags_b in coily_flags
-        a_ball = flags_a in ball_flags
-        b_ball = flags_b in ball_flags
-        # Different if one is ball and other is coily
-        if a_ball and b_coily:
-            return True
-        if a_coily and b_ball:
-            return True
-        return False
-
-    def get_type(self, slot):
-        """Return (etype, harmless) based on accumulated flags votes."""
-        votes = self._flags_votes.get(slot)
-        if not votes:
-            return "unknown", False
-
-        flags = votes.most_common(1)[0][0]
-
-        # ROM collision code: flags & 0x06 >= 4 → harmless handler
-        if flags & 0x06 >= 4:
-            return "sam", True
-
-        # Known deadly types
-        # 0x60 = Coily, 0x58 = Coily variant, 0x68 = Coily alternate phase
-        if flags in (0x60, 0x58, 0x68):
-            return "coily", False
-        if flags == 0x22:
-            return "ball", False
-
-        # Unknown but deadly (bits 1-2 < 4)
-        return "deadly", False
+    def is_coily(self, slot):
+        return self._is_coily.get(slot, False)
 
     def reset(self):
-        """Call on death/level change to clear stale slot data."""
         self._was_active.clear()
-        self._flags_votes.clear()
+        self._is_coily.clear()
 
 
 def gw_to_pos(gw0, gw1):
-    """Convert grid word to (row, col). ROM-verified."""
     return (gw0 - 1, gw0 - gw1)
 
 
 def pos_to_gw(row, col):
-    """Convert (row, col) to grid word."""
     return (row + 1, row - col + 1)
 
 
@@ -148,11 +90,6 @@ def is_valid(r, c):
 
 
 def read_state(data, tracker=None):
-    """Parse RAM dict into a GameState. All addresses ROM-verified.
-
-    If tracker is provided, uses multi-frame flag voting for type detection.
-    Otherwise falls back to behavior-only detection.
-    """
     qb_gw0 = data.get("qb_gw0", 0)
     qb_gw1 = data.get("qb_gw1", 0)
     qb_pos = gw_to_pos(qb_gw0, qb_gw1)
@@ -164,16 +101,16 @@ def read_state(data, tracker=None):
     enemies = []
     for n in range(10):
         st = data.get(f"e{n}_st", 0)
-        flags = data.get(f"e{n}_flags", 0)
-        active = st != 0
-
-        # Update tracker every frame, even for inactive slots
-        if tracker:
-            tracker.update(n, active, flags)
-
-        if not active:
+        if st == 0:
+            gw0 = data.get(f"e{n}_gw0", 0)
+            gw1 = data.get(f"e{n}_gw1", 0)
+            pw0 = data.get(f"e{n}_pw0", 0)
+            pw1 = data.get(f"e{n}_pw1", 0)
+            if tracker:
+                tracker.update(n, False, gw_to_pos(gw0, gw1), gw_to_pos(pw0, pw1))
             continue
 
+        flags = data.get(f"e{n}_flags", 0)
         gw0 = data.get(f"e{n}_gw0", 0)
         gw1 = data.get(f"e{n}_gw1", 0)
         pw0 = data.get(f"e{n}_pw0", 0)
@@ -184,15 +121,18 @@ def read_state(data, tracker=None):
         going_up = pos[0] < prev[0] if is_valid(prev[0], prev[1]) else False
 
         if tracker:
-            etype, harmless = tracker.get_type(n)
-            # Flags tell us the entity TYPE, behavior tells us the PHASE.
-            # Purple ball (flags=0x60) bounces down before hatching into Coily.
-            # Only treat as active Coily when actually going up (chasing).
-            if etype == "sam":
-                going_up = False  # Sam goes up too, but is harmless
+            tracker.update(n, True, pos, prev)
+            is_coily = tracker.is_coily(n)
         else:
-            harmless = False
-            etype = "coily" if going_up else "ball"
+            is_coily = going_up
+
+        if is_coily:
+            etype = "coily"
+            going_up = True  # Coily is always treated as chasing
+        else:
+            etype = "ball"
+
+        harmless = False
 
         enemies.append(Enemy(
             slot=n, pos=pos, prev_pos=prev,
