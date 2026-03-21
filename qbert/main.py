@@ -16,21 +16,6 @@ from qbert.planner import (
 
 ROMS_PATH = "/Users/pat/mame/roms"
 
-
-def _merge_ram_cubes_into_visited(state, visited):
-    """Mark cubes as visited if their RAM color matches the target color.
-
-    This supplements Python-tracked visited positions with ground-truth
-    from RAM, ensuring the planner doesn't revisit already-completed cubes.
-    """
-    if state.target_color == 0:
-        return  # target not set yet
-    for i, color in enumerate(state.cube_states):
-        if color == state.target_color:
-            pos = cube_index_to_pos(i)
-            if pos is not None:
-                visited[pos] = True
-
 # Timing constants (in frames, 1 frame per step)
 # Old MAMEToolkit used frame_ratio=3: 4 steps * 3 = 12 frames hold, 10 * 3 = 30 wait
 # Measured: grid word updates immediately. Q*bert needs ~30 frames for full
@@ -81,21 +66,13 @@ def run(overlay=False):
                 print(f"  Start attempt {attempt + 1} failed, retrying...")
 
             tracker.reset()
-            used_discs = set()  # track which discs we've used (by side)
+            used_discs = set()
             prev_lives = state.lives
-            prev_score = state.score_byte
-            total_score = 0
-            cubes = 0
             jumps = 0
-            visited = {}
             level = 1
             stuck_count = 0
             prev_pos = None
-            qbert_prev_known = None  # Python-tracked Q*bert previous position
-
             pos = state.qbert
-            if is_valid(pos[0], pos[1]):
-                visited[pos] = True
 
             print(f"\n--- Episode {episode}, Level {level} ---")
             print(f"  Lives={state.lives} Q*bert at {pos}")
@@ -103,16 +80,13 @@ def run(overlay=False):
             for step_num in range(3000):
                 state = read_state(data, tracker)
                 lives = state.lives
-                score = state.score_byte
 
-                # Score tracking (score byte wraps at 256)
-                sd = score - prev_score
-                if sd < 0:
-                    sd += 256
-                if sd >= 25:
-                    total_score += sd
-                    cubes += sd // 25
-                prev_score = score
+                # Build visited from RAM cube states — works for ALL levels
+                visited = {}
+                for ci in range(NUM_CUBES):
+                    if state.cube_states[ci] == state.target_color:
+                        visited[cube_index_to_pos(ci)] = True
+                cubes = NUM_CUBES - state.remaining_cubes
 
                 # Death check: lives decreased OR Q*bert is on same square as Coily
                 # (game may kill Q*bert before the lives byte updates in RAM)
@@ -140,12 +114,11 @@ def run(overlay=False):
                             f"@{e.pos} prev={e.prev_pos} fl={e.flags:#x}"
                         )
                     print(f"  DIED at {pos} lives={lives} cubes={cubes} "
-                          f"score={total_score}{enemy_info}")
+                          f"cubes={cubes}{enemy_info}")
                     if lives == 0:
                         break
                     prev_lives = lives
                     tracker.reset()
-                    qbert_prev_known = None
                     data = env.wait(300)
                     state = read_state(data, tracker)
                     pos = state.qbert
@@ -175,7 +148,6 @@ def run(overlay=False):
                     if valid:
                         act = random.choice(valid)[0]
                         port, field = MOVE_BUTTONS[act]
-                        qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
                         data = env.wait(HOP_WAIT)
                         stuck_count = 0
@@ -185,7 +157,7 @@ def run(overlay=False):
                 state.discs = [d for d in state.discs if d.side not in used_discs]
 
                 # Decide action
-                action = decide(state, visited, qbert_prev_known)
+                action = decide(state, visited)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
 
@@ -200,11 +172,9 @@ def run(overlay=False):
 
                 if is_disc_jump:
                     port, field = MOVE_BUTTONS[action]
-                    qbert_prev_known = pos
                     env.step_n(port, field, BUTTON_HOLD)
                     data = env.wait(300)
                     tracker.reset()
-                    qbert_prev_known = None
                     used_discs.add(disc_used.side)
                     state = read_state(data, tracker)
                     new_pos = state.qbert
@@ -256,8 +226,6 @@ def run(overlay=False):
                             action = best_alt
                         # else: all moves are in the zone, no override possible
 
-                # Track Q*bert's position before hopping
-                qbert_prev_known = pos
 
                 # Execute jump. Press direction briefly to start the hop.
                 # The grid word updates immediately. The game queues the next
@@ -279,7 +247,6 @@ def run(overlay=False):
                 visited[pos] = True
 
                 # Merge RAM cube states into visited (ground-truth supplement)
-                _merge_ram_cubes_into_visited(state, visited)
 
                 # Log significant events
                 enemy_str = ""
@@ -297,7 +264,7 @@ def run(overlay=False):
                 if was_new or enemy_str:
                     new_mark = " NEW" if was_new else ""
                     print(f"  #{jumps:3d} {MOVE_NAMES[action]:>5s} {pos}"
-                          f"  cubes={cubes}/{NUM_CUBES}  score={total_score}"
+                          f"  cubes={cubes}/{NUM_CUBES}  cubes={cubes}"
                           f"{enemy_str}{new_mark}")
 
                 # Overlay (every 3rd jump to save overhead)
@@ -312,7 +279,7 @@ def run(overlay=False):
 
                 # Level complete (score-based OR RAM remaining_cubes == 0)
                 if cubes >= NUM_CUBES or state.remaining_cubes == 0:
-                    print(f"\n  === LEVEL {level} COMPLETE! score={total_score} ===\n")
+                    print(f"\n  === LEVEL {level} COMPLETE! cubes={cubes} ===\n")
                     level += 1
                     cubes = 0
                     visited = {}
@@ -342,7 +309,7 @@ def run(overlay=False):
 
             missing = [(r, c) for r in range(MAX_ROW + 1) for c in range(r + 1)
                         if not visited.get((r, c), False)]
-            print(f"Game over! Score: {total_score}, Level {level}")
+            print(f"Game over! Cubes: {cubes}/28, Level {level}")
             if missing:
                 print(f"  Missing cubes: {missing}\n")
 
