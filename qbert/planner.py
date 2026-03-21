@@ -386,10 +386,13 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
     # Score each first_action by its best route
     action_scores = {}
     for first_action, new_cubes, escape, path_len, coily_d, endpoint, coily_end in routes:
-        score = (new_cubes * 200
-                 + escape * 30
-                 + coily_d * 15
-                 - path_len * 2)
+        # Route value: cubes matter but survival matters more.
+        # A 1-step dead-end (escape=1) with 1 cube should lose to
+        # a 5-step route (escape=4) with 1 cube.
+        score = (new_cubes * 100
+                 + escape * 50
+                 + coily_d * 20
+                 + path_len * 10)  # longer safe routes = more options
 
         # Bonus for moving toward a disc when Coily is chasing
         if disc_target and coily:
