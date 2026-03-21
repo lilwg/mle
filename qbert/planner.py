@@ -53,7 +53,7 @@ def nearest_unvisited(row, col, visited):
 
 
 # ---------------------------------------------------------------------------
-# World simulation: advance all enemies by one hop
+# Enemy simulation
 # ---------------------------------------------------------------------------
 
 def _build_ball_positions(state):
@@ -70,93 +70,129 @@ def _build_ball_positions(state):
 
 
 def _ball_positions_at_step(balls, step):
-    """Return set of positions occupied by balls at a given future step."""
+    """Return set of positions where balls are dangerous at a given step.
+
+    Includes both the ball's position AND its previous position
+    (mid-hop collision, matching ROM $BD1E logic).
+    """
     positions = set()
     for cur, path in balls:
         if step == 0:
             positions.add(cur)
-        elif step - 1 < len(path):
-            p = path[step - 1]
-            if is_valid(p[0], p[1]):
-                positions.add(p)
-            # Also include previous position (mid-hop catch)
-            if step - 2 >= 0:
-                prev = path[step - 2] if step >= 2 else cur
+        else:
+            idx = step - 1
+            if idx < len(path):
+                p = path[idx]
+                if is_valid(p[0], p[1]):
+                    positions.add(p)
+                # Previous position too (mid-hop)
+                prev = path[idx - 1] if idx >= 1 else cur
                 if is_valid(prev[0], prev[1]):
                     positions.add(prev)
     return positions
 
 
-def _coily_at_step(coily_pos, coily_target, qbert_positions, step):
-    """Return Coily's position after `step` hops.
+def _simulate_coily(coily_pos, coily_target, qbert_path, num_steps):
+    """Simulate Coily's positions for each step.
 
-    qbert_positions is a list of Q*bert's position at each step (step 0 = current).
-    Coily chases Q*bert's previous position (one step behind).
+    Returns list of (coily_pos_before_hop, coily_pos_after_hop) for each step.
+    coily_path[i] = Coily's position at step i (before hopping at step i+1).
     """
     if coily_pos is None:
-        return None
+        return [None] * (num_steps + 1)
+
+    positions = [coily_pos]  # step 0 = current position
     r, c = coily_pos
-    for i in range(step):
-        # Coily chases Q*bert's position from one step ago
+    for i in range(num_steps):
+        # Coily chases Q*bert's previous position (one step behind)
         if i == 0:
             target = coily_target
         else:
-            # After first hop, chase where Q*bert was when Coily started this hop
-            target = qbert_positions[i] if i < len(qbert_positions) else qbert_positions[-1]
+            # Chase where Q*bert was at the start of this step
+            target = qbert_path[i] if i < len(qbert_path) else qbert_path[-1]
         r, c = predict_coily(r, c, target[0], target[1])
         if not is_valid(r, c):
-            return None
-    return (r, c)
+            # Coily fell off — fill remaining with None
+            positions.extend([None] * (num_steps - i))
+            break
+        positions.append((r, c))
+
+    return positions
 
 
-def _is_dangerous_at_step(pos, coily_now, coily_next, ball_positions):
-    """Check if a position is dangerous (Coily or ball there).
+def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
+    """Check collision between Q*bert and Coily during a hop.
 
-    Checks both Coily's current position AND predicted next position,
-    since collision happens if Q*bert shares a square with Coily at any point.
+    ROM $BD1E checks three conditions:
+      1. Q*bert current vs Enemy current  (both at destination)
+      2. Q*bert current vs Enemy previous (Q*bert lands where enemy was)
+      3. Q*bert previous vs Enemy current (enemy lands where Q*bert was)
+
+    Since both hop simultaneously, "current" = after hop, "previous" = before hop.
     """
-    if coily_now and pos == coily_now:
+    if coily_before is None and coily_after is None:
+        return False
+    # Q*bert destination vs Coily destination
+    if coily_after and qbert_to == coily_after:
         return True
-    if coily_next and pos == coily_next:
+    # Q*bert destination vs Coily's pre-hop position
+    if coily_before and qbert_to == coily_before:
         return True
-    if pos in ball_positions:
+    # Q*bert's pre-hop position vs Coily destination (swap/crossing)
+    if coily_after and qbert_from == coily_after:
         return True
     return False
 
 
 # ---------------------------------------------------------------------------
-# Route search: BFS over (position, step) with enemy simulation
+# Route search
 # ---------------------------------------------------------------------------
 
 def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_depth=7):
-    """BFS to find routes to unvisited cubes that don't collide with enemies.
+    """BFS to find routes that don't collide with any enemy.
 
-    Returns list of (first_action, new_cubes, final_escape_routes, path_length)
-    for each safe route found.
+    At each step, simulates Coily's chase and ball bounces, checking the
+    full ROM collision logic (current vs current, current vs previous,
+    previous vs current) for both Coily and balls.
+
+    Returns list of (first_action, new_cubes, escape_routes, path_len, coily_dist)
     """
     routes = []
-
-    # BFS state: (row, col, step, first_action, path_positions, new_cubes_count)
     start = qbert_pos
+
+    # Pre-simulate Coily for max_depth steps assuming Q*bert stands still.
+    # We'll refine per-path, but this gives us a baseline.
+    # For the BFS we need per-path Coily simulation — do it inline.
+
     q = deque()
 
     for action, nr, nc in neighbors(start[0], start[1]):
-        # Check step 1: Coily's current pos AND where Coily will be after 1 hop
-        coily_0 = coily_pos  # Coily's current position
-        coily_1 = _coily_at_step(coily_pos, coily_target, [start], 1)
-        balls_1 = _ball_positions_at_step(balls, 1)
-        if _is_dangerous_at_step((nr, nc), coily_0, coily_1, balls_1):
+        path = [start, (nr, nc)]
+
+        # Simulate Coily for step 1
+        coily_steps = _simulate_coily(coily_pos, coily_target, path, 1)
+        coily_before = coily_steps[0]  # Coily at step 0
+        coily_after = coily_steps[1]   # Coily at step 1
+
+        # Check collision with Coily
+        if _collides_with_coily(start, (nr, nc), coily_before, coily_after):
             continue
+
+        # Check collision with balls
+        balls_1 = _ball_positions_at_step(balls, 1)
+        if (nr, nc) in balls_1:
+            continue
+
         new = 1 if not visited.get((nr, nc), False) else 0
-        q.append((nr, nc, 1, action, [start, (nr, nc)], new))
+
+        # Compute Coily distance at this point
+        coily_d = 99
+        if coily_after:
+            coily_d = grid_dist(nr, nc, coily_after[0], coily_after[1])
 
         escape = len(neighbors(nr, nc))
-        coily_d = 99
-        if coily_pos:
-            c1 = _coily_at_step(coily_pos, coily_target, [start, (nr, nc)], 1)
-            if c1:
-                coily_d = grid_dist(nr, nc, c1[0], c1[1])
         routes.append((action, new, escape, 1, coily_d))
+        q.append((nr, nc, 1, action, path, new))
 
     while q:
         cr, cc, step, first_action, path, new_cubes = q.popleft()
@@ -165,29 +201,33 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 
         for _, nr, nc in neighbors(cr, cc):
             next_step = step + 1
+            new_path = path + [(nr, nc)]
 
-            # Coily at previous step and at this step
-            coily_prev = _coily_at_step(coily_pos, coily_target, path, step)
-            coily_next = _coily_at_step(coily_pos, coily_target, path, next_step)
-            balls_s = _ball_positions_at_step(balls, next_step)
+            # Simulate Coily for this path
+            coily_steps = _simulate_coily(coily_pos, coily_target, new_path, next_step)
+            coily_before = coily_steps[step]       # Coily before this hop
+            coily_after = coily_steps[next_step]   # Coily after this hop
 
-            if _is_dangerous_at_step((nr, nc), coily_prev, coily_next, balls_s):
+            # ROM collision check with Coily
+            if _collides_with_coily((cr, cc), (nr, nc), coily_before, coily_after):
                 continue
 
-            # Don't revisit positions in the same path (no loops)
-            if (nr, nc) in path[-4:]:  # only check recent to allow some backtracking
+            # Ball collision check
+            balls_s = _ball_positions_at_step(balls, next_step)
+            if (nr, nc) in balls_s:
+                continue
+
+            # Don't revisit recent positions (prevent short loops)
+            if (nr, nc) in path[-4:]:
                 continue
 
             new = new_cubes + (1 if not visited.get((nr, nc), False) else 0)
-            new_path = path + [(nr, nc)]
 
             escape = len(neighbors(nr, nc))
-            # Compute Coily distance at endpoint for scoring
             coily_d = 99
-            if coily_pos:
-                c_end = _coily_at_step(coily_pos, coily_target, new_path, next_step)
-                if c_end:
-                    coily_d = grid_dist(nr, nc, c_end[0], c_end[1])
+            if coily_after:
+                coily_d = grid_dist(nr, nc, coily_after[0], coily_after[1])
+
             routes.append((first_action, new, escape, next_step, coily_d))
 
             if next_step < max_depth:
@@ -197,16 +237,11 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 
 
 # ---------------------------------------------------------------------------
-# Main decision function
+# Main decision
 # ---------------------------------------------------------------------------
 
 def decide(state: GameState, visited: dict) -> int:
-    """Pick the best action by searching safe multi-hop routes.
-
-    For each possible first move, explores routes up to 7 hops deep,
-    simulating Coily chase and ball bounces at each step. Picks the
-    first move that leads to the best safe route.
-    """
+    """Pick the best action by searching safe multi-hop routes."""
     row, col = state.qbert
     if not is_valid(row, col):
         return DOWN
@@ -215,7 +250,7 @@ def decide(state: GameState, visited: dict) -> int:
     if not valid:
         return DOWN
 
-    # Build enemy state for simulation
+    # Find Coily
     coily = None
     coily_target = None
     for e in state.enemies:
@@ -227,15 +262,14 @@ def decide(state: GameState, visited: dict) -> int:
             break
 
     balls = _build_ball_positions(state)
-    remaining = NUM_CUBES - sum(1 for v in visited.values() if v)
 
-    # Find all safe routes
+    # Search for safe routes
     routes = _find_safe_routes(
         (row, col), coily, coily_target, balls, visited, max_depth=7
     )
 
     if not routes:
-        # No safe routes found — pick the move furthest from Coily as last resort
+        # Desperation: pick move furthest from Coily
         best_action = DOWN
         best_dist = -1
         for action, nr, nc in valid:
@@ -245,11 +279,9 @@ def decide(state: GameState, visited: dict) -> int:
                 best_action = action
         return best_action
 
-    # Score each first_action by the best route it leads to
+    # Score each first_action by its best route
     action_scores = {}
     for first_action, new_cubes, escape, path_len, coily_d in routes:
-        # New cubes are valuable but not at the cost of getting trapped.
-        # Escape routes at endpoint and distance from Coily prevent traps.
         score = (new_cubes * 200
                  + escape * 30
                  + coily_d * 15
@@ -257,5 +289,4 @@ def decide(state: GameState, visited: dict) -> int:
         if first_action not in action_scores or score > action_scores[first_action]:
             action_scores[first_action] = score
 
-    best_action = max(action_scores, key=action_scores.get)
-    return best_action
+    return max(action_scores, key=action_scores.get)
