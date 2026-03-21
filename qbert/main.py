@@ -152,6 +152,13 @@ def run(overlay=False):
                     data = env.step()
                     continue
 
+                # Safety check: is the destination on any enemy RIGHT NOW?
+                for e in state.enemies:
+                    if is_valid(e.pos[0], e.pos[1]) and (nr, nc) == e.pos:
+                        print(f"  !!! PLANNER BUG: jumping to {(nr,nc)} "
+                              f"where {e.etype}@{e.pos} is! "
+                              f"coily_seen={any(x.etype=='coily' for x in state.enemies)}")
+
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 

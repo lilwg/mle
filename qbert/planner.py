@@ -147,7 +147,7 @@ def _collides_with_coily(qbert_from, qbert_to, coily_before, coily_after):
 # Route search
 # ---------------------------------------------------------------------------
 
-def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_depth=7):
+def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_depth=7, debug=False):
     """BFS to find routes that don't collide with any enemy.
 
     At each step, simulates Coily's chase and ball bounces, checking the
@@ -168,17 +168,15 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
     for action, nr, nc in neighbors(start[0], start[1]):
         path = [start, (nr, nc)]
 
-        # Simulate Coily for 2 steps — Coily can hop twice during Q*bert's
-        # single hop cycle (Coily hops faster: ~24 frames vs Q*bert ~42)
-        coily_steps = _simulate_coily(coily_pos, coily_target, path, 2)
+        # Simulate Coily for 1 step (1:1 hop ratio with Q*bert)
+        coily_steps = _simulate_coily(coily_pos, coily_target, path, 1)
         coily_0 = coily_steps[0]
         coily_1 = coily_steps[1] if len(coily_steps) > 1 else None
-        coily_2 = coily_steps[2] if len(coily_steps) > 2 else None
 
-        # Check collision with Coily at all intermediate positions
+        # Check collision with Coily
         if _collides_with_coily(start, (nr, nc), coily_0, coily_1):
-            continue
-        if _collides_with_coily(start, (nr, nc), coily_1, coily_2):
+            if debug:
+                print(f"    DBG-BLOCK: {start}→{(nr,nc)} coily={coily_0}→{coily_1}")
             continue
 
         # Check collision with balls
@@ -188,15 +186,12 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
 
         new = 1 if not visited.get((nr, nc), False) else 0
 
-        # Coily distance: use closest of step 1 and step 2 positions
         coily_d = 99
         if coily_1:
-            coily_d = min(coily_d, grid_dist(nr, nc, coily_1[0], coily_1[1]))
-        if coily_2:
-            coily_d = min(coily_d, grid_dist(nr, nc, coily_2[0], coily_2[1]))
+            coily_d = grid_dist(nr, nc, coily_1[0], coily_1[1])
 
         escape = len(neighbors(nr, nc))
-        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_2 or coily_1))
+        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_1))
         q.append((nr, nc, 1, action, path, new))
 
     while q:
@@ -320,7 +315,8 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                   f"enemies=[{', '.join(f'{e.etype}@{e.pos}' for e in state.enemies)}]")
 
     routes = _find_safe_routes(
-        (row, col), coily, coily_target, balls, visited, max_depth=7
+        (row, col), coily, coily_target, balls, visited, max_depth=7,
+        debug=debug and coily is not None and grid_dist(row, col, coily[0], coily[1]) <= 3
     )
 
     if debug and coily and grid_dist(row, col, coily[0], coily[1]) <= 3:
