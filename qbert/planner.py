@@ -250,11 +250,12 @@ def decide(state: GameState, visited: dict) -> int:
     if not valid:
         return DOWN
 
-    # Find Coily
+    # Find Coily — use etype not going_up, since Coily can be stationary
+    # between hops (pos == prev_pos → going_up is False)
     coily = None
     coily_target = None
     for e in state.enemies:
-        if e.going_up and not e.harmless and is_valid(e.pos[0], e.pos[1]):
+        if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
             coily = e.pos
             coily_target = state.qbert_prev
             if coily == coily_target:
