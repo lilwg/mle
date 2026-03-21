@@ -190,11 +190,11 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, balls, visited, max_de
         new = 1 if not visited.get((nr, nc), False) else 0
 
         coily_d = 99
-        if coily_1:
-            coily_d = grid_dist(nr, nc, coily_1[0], coily_1[1])
+        if coily_pos:
+            coily_d = grid_dist(nr, nc, coily_pos[0], coily_pos[1])
 
         escape = len(neighbors(nr, nc))
-        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_1))
+        routes.append((action, new, escape, 1, coily_d, (nr, nc), coily_pos))
         q.append((nr, nc, 1, action, path, new))
 
     while q:
