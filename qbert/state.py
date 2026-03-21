@@ -12,11 +12,13 @@ QBERT_RAM = {
     "qb_gw1": 0x0D67,
     "qb_prev0": 0x0D68,
     "qb_prev1": 0x0D69,
-    # Disc data: $0D4C/$0D4D = availability, $0D4E/$0D51 = row positions
+    # Disc data
     "disc0_avail": 0x0D4C,
     "disc1_avail": 0x0D4D,
     "disc0_row": 0x0D4E,
     "disc1_row": 0x0D51,
+    # Spawn timer: $0085 counts down each frame, spawn happens at 0
+    "spawn_countdown": 0x0085,
 }
 
 for _n in range(10):
@@ -61,6 +63,7 @@ class GameState:
     discs: list = field(default_factory=list)
     lives: int = 0
     score_byte: int = 0
+    spawn_countdown: int = 0  # frames until next enemy spawns at (1,0)
 
 
 class EnemyTracker:
@@ -196,4 +199,5 @@ def read_state(data, tracker=None):
         enemies=enemies, discs=discs,
         lives=data.get("lives", 0),
         score_byte=data.get("score", 0),
+        spawn_countdown=data.get("spawn_countdown", 0),
     )

@@ -75,13 +75,16 @@ def _build_ball_positions(state):
 
 SPAWN_POINTS = {(1, 0), (1, 1)}
 
-def _ball_positions_at_step(balls, step):
+def _ball_positions_at_step(balls, step, spawn_imminent=False):
     """Return set of positions where balls are dangerous at a given step.
 
     Includes both the ball's position AND its previous position
     (mid-hop collision, matching ROM $BD1E logic).
+    If spawn_imminent, also includes spawn points (1,0) and (1,1).
     """
     positions = set()
+    if spawn_imminent:
+        positions.update(SPAWN_POINTS)
     for cur, path in balls:
         if step == 0:
             positions.add(cur)
@@ -172,7 +175,7 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, coily_zone, balls, vis
             continue
 
         # Check collision with balls
-        balls_1 = _ball_positions_at_step(balls, 1)
+        balls_1 = _ball_positions_at_step(balls, 1, spawn_imminent)
         if (nr, nc) in balls_1:
             continue
 
@@ -206,7 +209,7 @@ def _find_safe_routes(qbert_pos, coily_pos, coily_target, coily_zone, balls, vis
                 continue
 
             # Ball collision check
-            balls_s = _ball_positions_at_step(balls, next_step)
+            balls_s = _ball_positions_at_step(balls, next_step, spawn_imminent)
             if (nr, nc) in balls_s:
                 continue
 
@@ -327,6 +330,8 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                 return disc.direction
 
     balls = _build_ball_positions(state)
+    # A spawn is imminent if countdown < 60 frames (Q*bert's hop takes ~52)
+    spawn_imminent = state.spawn_countdown < 60
 
     # All squares Coily could reach in 1 hop (current pos + 4 possible moves)
     coily_zone = set()
@@ -373,8 +378,8 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                     score -= 500
                 score += grid_dist(nr, nc, coily[0], coily[1]) * 10
             # Avoid balls
-            balls_now = _ball_positions_at_step(balls, 0)
-            balls_next = _ball_positions_at_step(balls, 1)
+            balls_now = _ball_positions_at_step(balls, 0, spawn_imminent)
+            balls_next = _ball_positions_at_step(balls, 1, spawn_imminent)
             if (nr, nc) in balls_now or (nr, nc) in balls_next:
                 score -= 200
             score += len(neighbors(nr, nc)) * 5
@@ -400,12 +405,6 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
                  + escape * 30
                  + coily_d * 15
                  - path_len * 2)
-
-        # Penalize moves that land on spawn points — balls can appear any time
-        dr2, dc2 = MOVE_DELTAS[first_action]
-        dest = (row + dr2, col + dc2)
-        if dest in SPAWN_POINTS:
-            score -= 80  # soft penalty, not a hard block
 
         # Bonus for moving toward a disc when Coily is chasing
         if disc_target and coily:
