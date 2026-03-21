@@ -96,7 +96,23 @@ def run(overlay=False):
                     cubes += sd // 25
                 prev_score = score
 
-                # Death check
+                # Death check: lives decreased OR Q*bert is on same square as Coily
+                # (game may kill Q*bert before the lives byte updates in RAM)
+                coily_on_qbert = any(
+                    e.etype == "coily" and e.pos == state.qbert
+                    for e in state.enemies
+                    if is_valid(e.pos[0], e.pos[1])
+                )
+                if coily_on_qbert and lives > 0:
+                    # Coily caught us — wait for the death to register
+                    for _ in range(60):
+                        data = env.step()
+                        s = read_state(data, tracker)
+                        if s.lives < lives:
+                            lives = s.lives
+                            break
+                    state = read_state(data, tracker)
+
                 if lives < prev_lives and prev_lives > 0:
                     pos = state.qbert
                     enemy_info = ""
