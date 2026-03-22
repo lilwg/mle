@@ -194,6 +194,13 @@ def _is_sequence_safe(state, actions):
     return True
 
 
+def _find_coily(state):
+    for e in state.enemies:
+        if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
+            return e.pos
+    return None
+
+
 def decide_survive(state):
     """3-hop lookahead: find all 3-move sequences that survive exact
     frame-by-frame simulation, then pick the one closest to target."""
@@ -205,6 +212,10 @@ def decide_survive(state):
     if not valid:
         return DOWN
 
+    # TODO: disc lure strategy (disc ride not working yet — disc availability
+    # from RAM may be stale, causing Q*bert to fall off instead of riding)
+    route = _target
+
     # Try all 3-hop sequences, collect safe first moves
     safe_first_moves = {}  # action -> best distance to target
 
@@ -212,7 +223,7 @@ def decide_survive(state):
         for a2, r2, c2 in neighbors(r1, c1):
             for a3, r3, c3 in neighbors(r2, c2):
                 if _is_sequence_safe(state, [a1, a2, a3]):
-                    d = grid_dist(r1, c1, _target[0], _target[1]) if _target else 0
+                    d = grid_dist(r1, c1, route[0], route[1]) if route else 0
                     if a1 not in safe_first_moves or d < safe_first_moves[a1]:
                         safe_first_moves[a1] = d
 
@@ -247,9 +258,9 @@ def _pick_target(state):
             _target = None
 
     if _target is None:
-        # Prioritize dead-end corners (6,0) and (6,6) — get them early
-        # before Coily makes them unreachable
-        for corner in [(6, 0), (6, 6)]:
+        # Prioritize dead-end corners — hit them before Coily hatches (~hop 35).
+        # (6,6) first since it's a straight diagonal from (0,0).
+        for corner in [(6, 6), (6, 0)]:
             idx = pos_to_cube_index(corner[0], corner[1])
             if idx is not None and state.cube_states[idx] != state.target_color:
                 _target = corner
@@ -289,6 +300,7 @@ def run():
     print(f"Game started: lives={state.lives}, Q*bert at {state.qbert}")
     prev_lives = state.lives
     hops = 0
+    used_discs = set()
     global _level_active
     _level_active = False
 
@@ -307,6 +319,7 @@ def run():
             global _target
             _target = None
             _level_active = False
+            used_discs = set()
             tracker.reset()
             # Wait for transition, then probe until Q*bert can move
             env.wait(300)
@@ -361,6 +374,9 @@ def run():
             data = env.step()
             continue
 
+        # Filter used discs
+        state.discs = [d for d in state.discs if d.side not in used_discs]
+
         # Pick target cube and decide move
         _pick_target(state)
         action = decide_survive(state)
@@ -383,6 +399,33 @@ def run():
             for s, et, ep, ef, ea in enemy_info:
                 cy = data.get(f"e{s}_coll_y", 0)
                 print(f"      s{s}:{et} @{ep} fl={ef:#x} anim={ea} cy={cy}")
+
+        # Check if this is a disc ride
+        is_disc = False
+        for disc in state.discs:
+            if pos == disc.jump_from and action == disc.direction:
+                is_disc = True
+                break
+
+        if is_disc:
+            port, field = MOVE_BUTTONS[action]
+            env.step_n(port, field, 6)
+            # Wait for disc ride to complete — Q*bert should end at (0,0)
+            data = env.wait(300)
+            tracker.reset()
+            used_discs.add(disc.side)
+            # Wait until Q*bert is at a valid position (disc ride done)
+            for _ in range(300):
+                data = env.step()
+                state = read_state(data, tracker)
+                if is_valid(state.qbert[0], state.qbert[1]) and state.qbert[0] <= 1:
+                    break
+            for _ in range(30):
+                data = env.step()
+            state = read_state(data, tracker)
+            hops += 1
+            print(f"  #{hops:3d} DISC! → {state.qbert}  cubes={cubes}/{NUM_CUBES}")
+            continue
 
         dr, dc = MOVE_DELTAS[action]
         nr, nc = pos[0] + dr, pos[1] + dc

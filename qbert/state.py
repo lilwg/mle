@@ -238,9 +238,7 @@ def read_state(data, tracker=None):
         if flag_type >= 4:
             etype = "sam"
             harmless = True
-        elif (flags & 0x60 == 0x60) or is_coily:
-            # Any flags with bits 5+6 set and bits 1-2 < 4 = Coily variant
-            # Covers 0x60, 0x62, 0x68, 0x6a, etc.
+        elif flags == 0x68 or is_coily:
             etype = "coily"
             harmless = False
         else:
