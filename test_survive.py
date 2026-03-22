@@ -231,7 +231,7 @@ def decide_survive(state):
         )
         if real_coily:
             coily_d = grid_dist(row, col, coily[0], coily[1])
-            if coily_d <= 1:
+            if coily_d <= 2:
                 for disc in state.discs:
                     if (row, col) == disc.jump_from:
                         return disc.direction
@@ -438,10 +438,17 @@ def run():
                 break
 
         if is_disc:
-            # Debug: show disc data
-            print(f"  DISC trigger: pos={pos} disc={disc} "
-                  f"d0a={data.get('disc0_avail',0)} d0r={data.get('disc0_row',0)} "
-                  f"d1a={data.get('disc1_avail',0)} d1r={data.get('disc1_row',0)}")
+            # Verify Q*bert is actually at the disc position (not a stale read)
+            actual_pos = read_state(data, tracker).qbert
+            if actual_pos != disc.jump_from:
+                data = env.step()
+                continue
+            # Verify disc is still available in RAM
+            d_avail = data.get(f"disc{'0' if 'left' in disc.side else '1'}_avail", 0)
+            if not d_avail:
+                data = env.step()
+                continue
+            print(f"  DISC: pos={pos} side={disc.side} avail={d_avail}")
             port, field = MOVE_BUTTONS[action]
             env.step_n(port, field, 6)
             # Wait for disc ride to complete — Q*bert should end at (0,0)
@@ -467,19 +474,21 @@ def run():
             data = env.step()
             continue
 
-        # Execute hop: hold button, wait for gw change, read remaining frames
+        # Execute hop: hold button, then wait for Q*bert to be fully landed
+        # (qb_anim >= 16 = ready for next input). This ensures the grid word
+        # has stabilized and the position we read is correct.
         port, field = MOVE_BUTTONS[action]
-        gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
+        pos_before = pos
         env.step_n(port, field, 6)
-        hop_frame = 0
-        for _ in range(20):
+        for _ in range(35):
             data = env.step()
-            hop_frame += 1
-            if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
+            if data.get("qb_anim", 0) >= 16:
                 break
-        while hop_frame < 12:
-            data = env.step()
-            hop_frame += 1
+        # Verify hop registered
+        state = read_state(data, tracker)
+        if state.qbert == pos_before:
+            # Hop didn't register — retry on next iteration
+            continue
         hops += 1
 
         # Post-hop: check if we're now on an enemy (death imminent)
