@@ -101,26 +101,24 @@ def _ball_positions_at_step(balls, step, spawn_imminent=False):
 
 
 def _simulate_coily(coily_pos, coily_target, qbert_path, num_steps):
-    """Simulate Coily's positions for each step.
+    """Simulate Coily's positions for each Q*bert step.
 
-    Returns list of (coily_pos_before_hop, coily_pos_after_hop) for each step.
-    coily_path[i] = Coily's position at step i (before hopping at step i+1).
+    Uses 1:1 hop ratio (conservative). Coily actually hops slower than
+    Q*bert, but collision detection runs mid-animation, so treating
+    Coily as same-speed prevents close encounters.
     """
     if coily_pos is None:
         return [None] * (num_steps + 1)
 
-    positions = [coily_pos]  # step 0 = current position
+    positions = [coily_pos]
     r, c = coily_pos
     for i in range(num_steps):
-        # Coily chases Q*bert's previous position (one step behind)
         if i == 0:
             target = coily_target
         else:
-            # Chase where Q*bert was at the start of this step
             target = qbert_path[i] if i < len(qbert_path) else qbert_path[-1]
         r, c = predict_coily(r, c, target[0], target[1])
         if not is_valid(r, c):
-            # Coily fell off — fill remaining with None
             positions.extend([None] * (num_steps - i))
             break
         positions.append((r, c))
@@ -321,7 +319,9 @@ def decide(state: GameState, visited: dict, qbert_prev_known=None, debug=False) 
     # Block spawn points when a spawn could happen within 2 Q*bert hops (~36 frames)
     spawn_imminent = state.spawn_countdown < 45
 
-    # All squares Coily could reach in 1 hop (current pos + 4 possible moves)
+    # Coily danger zone. Block current position + all possible next hops.
+    # Even though Coily hops slower than Q*bert, collision detection
+    # checks mid-hop positions too — can't safely hop adjacent to Coily.
     coily_zone = set()
     if coily:
         coily_zone.add(coily)
