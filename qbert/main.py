@@ -170,7 +170,15 @@ def run(overlay=False):
                 state.discs = [d for d in state.discs if d.side not in used_discs]
 
                 # Decide action
+                from qbert.planner import _danger_set, _search_routes
+                dangers_1 = _danger_set(state, 1)
+                routes = _search_routes(state, visited)
                 action = decide(state, visited, qbert_prev_known)
+                dr2, dc2 = MOVE_DELTAS[action]
+                dest = (pos[0]+dr2, pos[1]+dc2)
+                print(f"    decide: Q@{pos} → {MOVE_NAMES[action]}→{dest} "
+                      f"enemies={len(state.enemies)} dangers={len(dangers_1)} "
+                      f"routes={len(routes)} valid={is_valid(dest[0],dest[1])}")
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
 
