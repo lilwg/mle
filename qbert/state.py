@@ -13,6 +13,7 @@ QBERT_RAM = {
     "qb_prev0": 0x0D68,
     "qb_prev1": 0x0D69,
     # Disc data
+    # Disc data (empirically verified — these addresses gave working disc rides)
     "disc0_avail": 0x0D4C,
     "disc1_avail": 0x0D4D,
     "disc0_row": 0x0D4E,
@@ -156,8 +157,9 @@ UP = 0     # Up-Right action
 def _parse_discs(data):
     """Parse disc availability and positions from RAM.
 
-    Disc positions: $0D4E and $0D51 store the row number.
-    To use a disc, Q*bert jumps off the edge at row = disc_row + 1.
+    ROM $AF3A: 3 disc slots. Availability at $0D4C+n, rows at $0D4F+n.
+    Disc sides alternate: slot 0=left, slot 1=right, slot 2=left.
+    To use: Q*bert jumps off the edge at row = disc_row + 1.
     Left disc: jump UP-LEFT from (disc_row+1, 0)
     Right disc: jump UP-RIGHT from (disc_row+1, disc_row+1)
     """

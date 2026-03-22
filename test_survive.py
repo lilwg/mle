@@ -212,9 +212,32 @@ def decide_survive(state):
     if not valid:
         return DOWN
 
-    # TODO: disc lure strategy (disc ride not working yet — disc availability
-    # from RAM may be stale, causing Q*bert to fall off instead of riding)
+    # Disc override: if at a disc launch point and a CONFIRMED Coily
+    # (fl=0x68 or tracker-confirmed, NOT pre-hatch purple ball) is within 3
+    coily = _find_coily(state)
+    if coily and state.discs:
+        # Verify it's actual Coily, not pre-hatch purple ball
+        real_coily = any(
+            e.etype == "coily" and e.flags == 0x68
+            and is_valid(e.pos[0], e.pos[1])
+            for e in state.enemies
+        )
+        if real_coily:
+            coily_d = grid_dist(row, col, coily[0], coily[1])
+            if coily_d <= 3:
+                for disc in state.discs:
+                    if (row, col) == disc.jump_from:
+                        return disc.direction
+
+    # When Coily is active, route toward nearest disc
     route = _target
+    if coily and state.discs:
+        best_dd = 999
+        for disc in state.discs:
+            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+            if dd < best_dd:
+                best_dd = dd
+                route = disc.jump_from
 
     # Try all 3-hop sequences, collect safe first moves
     safe_first_moves = {}  # action -> best distance to target
