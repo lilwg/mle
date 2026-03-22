@@ -40,13 +40,8 @@ def generate_seqs(r, c, depth, max_depth, path):
         path.pop()
 
 
-def _sim_check_collision(qpos, qprev, epos, eprev):
-    """Collision check: current position match only.
-
-    The ROM also cross-checks prev positions, but those only fire when
-    collision Y distance < 4 (both entities grounded at same height).
-    Since we don't model collision Y, skip the cross-checks to avoid
-    false positives from near-misses the real game allows."""
+def _sim_check_collision(qpos, epos):
+    """Collision check: current position match."""
     return qpos == epos
 
 
@@ -104,31 +99,25 @@ def _is_sequence_safe(state, actions):
         # Ugg/Wrongway detection is handled separately below (off-grid positions)
 
         # anim=0 means enemy is in HOP ANIMATION (lasts ~17 frames).
-        # Grid word updates during this phase — enemy is transitioning
-        # to its next position. Block both current AND next position.
+        # The entity is between its current and next position. Block BOTH:
+        # current position (might still be there) and destination (arriving).
         if anim == 0:
             anim = COILY_RELOAD if etype == "coily" else BALL_RELOAD
-            # Add a second entity at the predicted next position
+            # Predict destination and add as a SECOND blocker
             if etype == "coily":
                 qr, qc = state.qbert
                 qprev = state.qbert_prev
                 target = qprev if pos_e != qprev else (qr, qc)
                 nr, nc = predict_coily(pos_e[0], pos_e[1], target[0], target[1])
                 if is_valid(nr, nc):
-                    enemies.append([
-                        (nr, nc), pos_e, anim, etype,
-                        e.direction_bits, e.flags,
-                    ])
+                    enemies.append([(nr, nc), pos_e, anim, "coily", e.direction_bits, e.flags])
             elif etype == "ball":
                 if e.direction_bits & 1:
                     nr, nc = pos_e[0] + 1, pos_e[1] + 1
                 else:
                     nr, nc = pos_e[0] + 1, pos_e[1]
                 if is_valid(nr, nc):
-                    enemies.append([
-                        (nr, nc), pos_e, anim, etype,
-                        e.direction_bits >> 1, e.flags,
-                    ])
+                    enemies.append([(nr, nc), pos_e, anim, "ball", e.direction_bits >> 1, e.flags])
         else:
             anim = max(anim, 1)
 
@@ -196,7 +185,7 @@ def _is_sequence_safe(state, actions):
         for en in enemies:
             if not is_valid(en[0][0], en[0][1]):
                 continue
-            if _sim_check_collision(qpos, qprev, en[0], en[1]):
+            if _sim_check_collision(qpos, en[0]):
                 return False
 
     return True
