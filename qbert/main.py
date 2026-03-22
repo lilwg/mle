@@ -234,13 +234,11 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump. Read every frame during the hop so the
-                # tracker sees enemy movements. Total: 6 hold + 16 wait = 22 frames.
+                # Execute jump. 18-frame hop cycle (measured game minimum).
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                for _f in range(16):
+                for _f in range(18 - BUTTON_HOLD):
                     data = env.step()
-                # Final state will be read at top of next loop iteration
                 jumps += 1
 
                 # Update position
