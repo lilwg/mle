@@ -228,13 +228,23 @@ def decide_survive(state):
 
     coily = _find_coily(state)
 
-    # Try all 3-hop sequences toward the TARGET CUBE first
+    # If Sam/Slick is on the board, prefer routing toward it
+    # (catching prevents cube regression, gives 300 pts bonus)
+    target = _target
+    for e in state.enemies:
+        if e.harmless and is_valid(e.pos[0], e.pos[1]):
+            sam_d = grid_dist(row, col, e.pos[0], e.pos[1])
+            if sam_d <= 4:  # only chase if nearby
+                target = e.pos
+                break
+
+    # Try all 3-hop sequences toward target
     safe_first_moves = {}
     for a1, r1, c1 in valid:
         for a2, r2, c2 in neighbors(r1, c1):
             for a3, r3, c3 in neighbors(r2, c2):
                 if _is_sequence_safe(state, [a1, a2, a3]):
-                    d = grid_dist(r1, c1, _target[0], _target[1]) if _target else 0
+                    d = grid_dist(r1, c1, target[0], target[1]) if target else 0
                     if a1 not in safe_first_moves or d < safe_first_moves[a1]:
                         safe_first_moves[a1] = d
 
