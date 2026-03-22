@@ -234,17 +234,13 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump, wait for animation to complete
+                # Execute jump. Read every frame during the hop so the
+                # tracker sees enemy movements. Total: 6 hold + 16 wait = 22 frames.
                 port, field = MOVE_BUTTONS[action]
                 env.step_n(port, field, BUTTON_HOLD)
-                for _ in range(20):
+                for _f in range(16):
                     data = env.step()
-                    if data.get("qb_anim", 16) < 16:
-                        break
-                for _ in range(40):
-                    data = env.step()
-                    if data.get("qb_anim", 0) >= 16:
-                        break
+                # Final state will be read at top of next loop iteration
                 jumps += 1
 
                 # Update position
