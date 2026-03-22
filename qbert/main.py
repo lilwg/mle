@@ -212,36 +212,6 @@ def run(overlay=False):
                     data = env.step()
                     continue
 
-                # Safety override: if destination is on or adjacent to Coily, pick a safer move
-                coily_enemy = None
-                for e in state.enemies:
-                    if e.etype == "coily" and is_valid(e.pos[0], e.pos[1]):
-                        coily_enemy = e.pos
-                        break
-                if coily_enemy:
-                    # Build danger zone: Coily + all its 1-hop moves
-                    czr, czc = coily_enemy
-                    c_zone = {coily_enemy}
-                    for cdr, cdc in [(-1, -1), (-1, 0), (1, 0), (1, 1)]:
-                        cp = (czr + cdr, czc + cdc)
-                        if is_valid(cp[0], cp[1]):
-                            c_zone.add(cp)
-                    if (nr, nc) in c_zone:
-                        # Planner picked a dangerous move — override with safest alternative
-                        best_alt = None
-                        best_d = -1
-                        for alt_a, alt_r, alt_c in neighbors(pos[0], pos[1]):
-                            if (alt_r, alt_c) not in c_zone:
-                                d = grid_dist(alt_r, alt_c, czr, czc)
-                                if d > best_d:
-                                    best_d = d
-                                    best_alt = alt_a
-                                    nr, nc = alt_r, alt_c
-                        if best_alt is not None:
-                            action = best_alt
-                        # else: all moves are in the zone, no override possible
-
-
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
