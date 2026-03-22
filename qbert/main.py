@@ -11,7 +11,7 @@ from mle import MameEnv
 from qbert.state import QBERT_RAM, read_state, is_valid, NUM_CUBES, MAX_ROW, EnemyTracker, cube_index_to_pos
 from qbert.planner import (
     decide, neighbors, grid_dist, MOVE_BUTTONS, MOVE_NAMES, MOVE_DELTAS,
-    COIN_BUTTON, START_BUTTON, DOWN,
+    COIN_BUTTON, START_BUTTON, DOWN, reset_history,
 )
 
 ROMS_PATH = "/Users/pat/mame/roms"
@@ -82,7 +82,6 @@ def run(overlay=False):
             visited = {}
             stuck_count = 0
             prev_pos = None
-            qbert_prev_known = None
             pos = state.qbert
 
             print(f"\n--- Episode {episode}, Level {level} ---")
@@ -95,14 +94,14 @@ def run(overlay=False):
                 # Use remaining_cubes from RAM for cube count (works all levels)
                 cubes = NUM_CUBES - state.remaining_cubes
 
-                # Death check: lives decreased OR Q*bert is on same square as Coily
-                # (game may kill Q*bert before the lives byte updates in RAM)
-                coily_on_qbert = any(
-                    e.etype == "coily" and e.pos == state.qbert
+                # Death check: lives decreased OR Q*bert is on same square as
+                # any harmful enemy (game may kill before lives byte updates)
+                enemy_on_qbert = any(
+                    not e.harmless and e.pos == state.qbert
                     for e in state.enemies
                     if is_valid(e.pos[0], e.pos[1])
                 )
-                if coily_on_qbert and lives > 0:
+                if enemy_on_qbert and lives > 0:
                     # Coily caught us — wait for the death to register
                     for _ in range(60):
                         data = env.step()
@@ -120,13 +119,13 @@ def run(overlay=False):
                             f"\n    s{e.slot}: {e.etype} "
                             f"@{e.pos} prev={e.prev_pos} fl={e.flags:#x}"
                         )
-                    print(f"  DIED at {pos} lives={lives} cubes={cubes} "
-                          f"cubes={cubes}{enemy_info}")
+                    print(f"  DIED at {pos} lives={lives} cubes={cubes}/{NUM_CUBES}"
+                          f"{enemy_info}")
                     if lives == 0:
                         break
                     prev_lives = lives
                     tracker.reset()
-                    qbert_prev_known = None
+                    reset_history()
                     data = env.wait(300)
                     state = read_state(data, tracker)
                     pos = state.qbert
@@ -156,7 +155,6 @@ def run(overlay=False):
                     if valid:
                         act = random.choice(valid)[0]
                         port, field = MOVE_BUTTONS[act]
-                        qbert_prev_known = pos
                         env.step_n(port, field, BUTTON_HOLD)
                         data = env.wait(HOP_WAIT)
                         stuck_count = 0
@@ -166,25 +164,13 @@ def run(overlay=False):
                 state.discs = [d for d in state.discs if d.side not in used_discs]
 
                 # Decide action
-                from qbert.planner import _danger_set, _search_routes
-                dangers_1 = _danger_set(state, 1)
-                routes = _search_routes(state, visited)
-                action = decide(state, visited, qbert_prev_known)
-                dr2, dc2 = MOVE_DELTAS[action]
-                dest = (pos[0]+dr2, pos[1]+dc2)
-                print(f"    decide: Q@{pos} → {MOVE_NAMES[action]}→{dest} "
-                      f"enemies={len(state.enemies)} dangers={len(dangers_1)} "
-                      f"routes={len(routes)} valid={is_valid(dest[0],dest[1])}")
+                action, mode = decide(state)
                 dr, dc = MOVE_DELTAS[action]
                 nr, nc = pos[0] + dr, pos[1] + dc
 
                 # Check if this is a disc jump (intentionally off pyramid)
                 is_disc_jump = False
                 disc_used = None
-                if not is_valid(nr, nc):
-                    print(f"    INVALID dest {(nr,nc)} — checking discs: "
-                          f"discs={[(d.side, d.jump_from, d.direction) for d in state.discs]} "
-                          f"used={used_discs} pos={pos} action={action}")
                 for disc in state.discs:
                     if pos == disc.jump_from and action == disc.direction:
                         is_disc_jump = True
@@ -193,11 +179,10 @@ def run(overlay=False):
 
                 if is_disc_jump:
                     port, field = MOVE_BUTTONS[action]
-                    qbert_prev_known = pos
                     env.step_n(port, field, BUTTON_HOLD)
                     data = env.wait(300)
                     tracker.reset()
-                    qbert_prev_known = None
+                    reset_history()
                     used_discs.add(disc_used.side)
                     state = read_state(data, tracker)
                     new_pos = state.qbert
@@ -208,8 +193,8 @@ def run(overlay=False):
                         jumps += 1
                         print(f"  #{jumps:3d} DISC! → {pos}  cubes={cubes}/{NUM_CUBES}")
                     else:
-                        # Disc was already used — Q*bert jumped off pyramid
-                        # This is a death, handle in next iteration
+                        # Disc was consumed — Q*bert jumped off and died
+                        used_discs.add(disc_used.side)
                         pos = new_pos
                         jumps += 1
                     prev_pos = None
@@ -219,9 +204,6 @@ def run(overlay=False):
                 if not is_valid(nr, nc):
                     data = env.step()
                     continue
-
-                # Track Q*bert's position before hopping
-                qbert_prev_known = pos
 
                 # Execute jump. Press direction, wait for gw to change
                 # (hop started), then read more frames for enemy positions.
@@ -267,7 +249,7 @@ def run(overlay=False):
                 if was_new or enemy_str:
                     new_mark = " NEW" if was_new else ""
                     print(f"  #{jumps:3d} {MOVE_NAMES[action]:>5s} {pos}"
-                          f"  cubes={cubes}/{NUM_CUBES}  cubes={cubes}"
+                          f"  cubes={cubes}/{NUM_CUBES} [{mode}]"
                           f"{enemy_str}{new_mark}")
 
                 # Overlay (every 3rd jump to save overhead)
@@ -289,6 +271,7 @@ def run(overlay=False):
                     jumps = 0
                     stuck_count = 0
                     used_discs = set()
+                    reset_history()
                     # Wait for level transition animation
                     env.wait(600)
                     # Reset tracker and read frames until Q*bert is valid

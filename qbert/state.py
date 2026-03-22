@@ -21,6 +21,8 @@ QBERT_RAM = {
     "spawn_countdown": 0x0085,
     # Q*bert animation counter: 0 = mid-hop, >= 16 = ready for next hop
     "qb_anim": 0x0D5F,
+    # Q*bert collision Y (used in distance check before grid word comparison)
+    "qb_coll_y": 0x0D61,
     # Cube tracking: 28 cube color states, target color, remaining count
     "target_color": 0x0D1E,
     "remaining_cubes": 0x0D23,
@@ -35,6 +37,7 @@ for _n in range(10):
     QBERT_RAM[f"e{_n}_st"] = _base
     QBERT_RAM[f"e{_n}_flags"] = _base + 10
     QBERT_RAM[f"e{_n}_anim"] = _base + 11
+    QBERT_RAM[f"e{_n}_coll_y"] = _base + 13
     QBERT_RAM[f"e{_n}_dir"] = _base + 14
     QBERT_RAM[f"e{_n}_gw0"] = _base + 18
     QBERT_RAM[f"e{_n}_gw1"] = _base + 19
@@ -59,6 +62,7 @@ class Enemy:
     anim: int
     flags: int
     state: int
+    coll_y: int
     going_up: bool
     harmless: bool
     etype: str
@@ -79,25 +83,30 @@ class GameState:
 
 
 class EnemyTracker:
-    """Tracks whether each slot has ever gone up (= Coily)."""
+    """Tracks whether each slot has ever moved upward (= Coily).
+
+    Once a slot shows upward movement, it's marked as Coily until reset().
+    No active/inactive tracking — the state byte flickers and is unreliable
+    for determining slot activity.
+    """
 
     def __init__(self):
-        self._was_active = {}
         self._is_coily = {}
 
-    def update(self, slot, active, pos, prev_pos):
-        if active and not self._was_active.get(slot, False):
-            self._is_coily[slot] = False
-        if active and is_valid(pos[0], pos[1]) and is_valid(prev_pos[0], prev_pos[1]):
-            if pos[0] < prev_pos[0]:
+    def update(self, slot, pos, prev_pos):
+        if is_valid(pos[0], pos[1]) and is_valid(prev_pos[0], prev_pos[1]):
+            # Only count as upward movement if it's a single hop (distance 1).
+            # Larger jumps indicate slot reuse (new entity in old slot with
+            # stale prev grid word), not actual Coily movement.
+            dr = abs(pos[0] - prev_pos[0])
+            dc = abs(pos[1] - prev_pos[1])
+            if pos[0] < prev_pos[0] and dr == 1 and dc <= 1:
                 self._is_coily[slot] = True
-        self._was_active[slot] = active
 
     def is_coily(self, slot):
         return self._is_coily.get(slot, False)
 
     def reset(self):
-        self._was_active.clear()
         self._is_coily.clear()
 
 
@@ -189,44 +198,66 @@ def read_state(data, tracker=None):
     enemies = []
     for n in range(10):
         st = data.get(f"e{n}_st", 0)
-        if st == 0:
-            gw0 = data.get(f"e{n}_gw0", 0)
-            gw1 = data.get(f"e{n}_gw1", 0)
-            pw0 = data.get(f"e{n}_pw0", 0)
-            pw1 = data.get(f"e{n}_pw1", 0)
-            if tracker:
-                tracker.update(n, False, gw_to_pos(gw0, gw1), gw_to_pos(pw0, pw1))
-            continue
-
         flags = data.get(f"e{n}_flags", 0)
+
+        # Primary check: st != 0 means active.
+        # Secondary: st == 0 can mean flickering (active enemy caught mid-update)
+        # or truly inactive (stale data). Distinguish by: if flags != 0 AND
+        # anim counter > 0 AND position is valid, it's flickering (active).
         gw0 = data.get(f"e{n}_gw0", 0)
         gw1 = data.get(f"e{n}_gw1", 0)
         pw0 = data.get(f"e{n}_pw0", 0)
         pw1 = data.get(f"e{n}_pw1", 0)
+        anim = data.get(f"e{n}_anim", 0)
+        pos_check = gw_to_pos(gw0, gw1)
+
+        if st == 0:
+            if flags != 0 and anim > 0 and is_valid(pos_check[0], pos_check[1]):
+                # Flickering active enemy — include it
+                pass  # fall through to normal processing
+            else:
+                # Truly inactive
+                if tracker:
+                    tracker.update(n, pos_check, gw_to_pos(pw0, pw1))
+                continue
         pos = gw_to_pos(gw0, gw1)
         prev = gw_to_pos(pw0, pw1)
 
         going_up = pos[0] < prev[0] if is_valid(prev[0], prev[1]) else False
 
         if tracker:
-            tracker.update(n, True, pos, prev)
+            tracker.update(n, pos, prev)
             is_coily = tracker.is_coily(n)
         else:
             is_coily = going_up
 
-        if is_coily:
+        # Classify enemy type using flags byte and tracker
+        # Flags byte bits 1-2 (mask 0x06): >= 4 means Sam/Slick (harmless)
+        # fl=0x68: definitively hatched Coily (flags change from 0x60 to 0x68 at hatch)
+        flag_type = flags & 0x06
+        if flag_type >= 4:
+            etype = "sam"
+            harmless = True
+        elif (flags & 0x60 == 0x60) or is_coily:
+            # Any flags with bits 5+6 set and bits 1-2 < 4 = Coily variant
+            # Covers 0x60, 0x62, 0x68, 0x6a, etc.
             etype = "coily"
-            going_up = True
+            harmless = False
         else:
             etype = "ball"
+            harmless = False
 
-        harmless = False
+        coll_y = data.get(f"e{n}_coll_y", 0)
+        # Skip phantom entries: coll_y == 0 means no real screen presence
+        if coll_y == 0:
+            continue
 
         enemies.append(Enemy(
             slot=n, pos=pos, prev_pos=prev,
             direction_bits=data.get(f"e{n}_dir", 0),
-            anim=data.get(f"e{n}_anim", 0),
+            anim=anim,
             flags=flags, state=st,
+            coll_y=coll_y,
             going_up=going_up, harmless=harmless,
             etype=etype,
         ))
