@@ -181,6 +181,10 @@ def run(overlay=False):
                 # Check if this is a disc jump (intentionally off pyramid)
                 is_disc_jump = False
                 disc_used = None
+                if not is_valid(nr, nc):
+                    print(f"    INVALID dest {(nr,nc)} — checking discs: "
+                          f"discs={[(d.side, d.jump_from, d.direction) for d in state.discs]} "
+                          f"used={used_discs} pos={pos} action={action}")
                 for disc in state.discs:
                     if pos == disc.jump_from and action == disc.direction:
                         is_disc_jump = True
