@@ -45,19 +45,15 @@ def run(overlay=False):
                 # Wait through game over / attract mode
                 env.wait(900)
 
-            # First episode: suicide immediately to advance MAME internal state.
-            # Second episode onwards: play for real with a different seed.
+            # First episode: throwaway to vary MAME seed
             if episode == 1:
+                print("  Throwaway game for seed variation...")
                 env.step_n(*COIN_BUTTON, 15)
-                env.wait(180)
+                env.wait(60)
                 env.step_n(*START_BUTTON, 5)
+                env.wait(300)
                 env.wait(600)
-                # Jump off the pyramid to die fast
-                for _ in range(3):
-                    env.step_n(":IN4", "P1 Down (Down-Left)", 6)
-                    env.wait(30)
-                env.wait(900)  # wait through game over
-                print("  (throwaway game to vary seed)")
+                print("  Done, starting real game.")
                 episode += 1
             for attempt in range(3):
                 env.step_n(*COIN_BUTTON, 15)
