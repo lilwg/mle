@@ -45,9 +45,20 @@ def run(overlay=False):
                 # Wait through game over / attract mode
                 env.wait(900)
 
-            # Insert coin and start game, retry if needed
-            # Random wait to break MAME determinism (different seed each episode)
-            env.wait(random.randint(0, 60))
+            # First episode: suicide immediately to advance MAME internal state.
+            # Second episode onwards: play for real with a different seed.
+            if episode == 1:
+                env.step_n(*COIN_BUTTON, 15)
+                env.wait(180)
+                env.step_n(*START_BUTTON, 5)
+                env.wait(600)
+                # Jump off the pyramid to die fast
+                for _ in range(3):
+                    env.step_n(":IN4", "P1 Down (Down-Left)", 6)
+                    env.wait(30)
+                env.wait(900)  # wait through game over
+                print("  (throwaway game to vary seed)")
+                episode += 1
             for attempt in range(3):
                 env.step_n(*COIN_BUTTON, 15)
                 env.wait(180)
@@ -234,11 +245,22 @@ def run(overlay=False):
                 # Track Q*bert's position before hopping
                 qbert_prev_known = pos
 
-                # Execute jump. 18-frame hop cycle (measured game minimum).
+                # Execute jump. Press direction, wait for gw to change
+                # (hop started), then read more frames for enemy positions.
                 port, field = MOVE_BUTTONS[action]
+                gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
                 env.step_n(port, field, BUTTON_HOLD)
-                for _f in range(18 - BUTTON_HOLD):
+                # Wait for gw change (hop registered)
+                hop_frame = 0
+                for _f in range(20):
                     data = env.step()
+                    hop_frame += 1
+                    if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
+                        break
+                # Read remaining frames up to 18 total for enemy data
+                while hop_frame < 18 - BUTTON_HOLD:
+                    data = env.step()
+                    hop_frame += 1
                 jumps += 1
 
                 # Update position
