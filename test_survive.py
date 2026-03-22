@@ -41,14 +41,13 @@ def generate_seqs(r, c, depth, max_depth, path):
 
 
 def _sim_check_collision(qpos, qprev, epos, eprev):
-    """ROM-style collision: grid word cross-check."""
-    if qpos == epos:
-        return True
-    if is_valid(eprev[0], eprev[1]) and qpos == eprev:
-        return True
-    if is_valid(qprev[0], qprev[1]) and qprev == epos:
-        return True
-    return False
+    """Collision check: current position match only.
+
+    The ROM also cross-checks prev positions, but those only fire when
+    collision Y distance < 4 (both entities grounded at same height).
+    Since we don't model collision Y, skip the cross-checks to avoid
+    false positives from near-misses the real game allows."""
+    return qpos == epos
 
 
 def _is_sequence_safe(state, actions):
@@ -104,10 +103,32 @@ def _is_sequence_safe(state, actions):
 
         # Ugg/Wrongway detection is handled separately below (off-grid positions)
 
-        # anim=0 means enemy JUST HOPPED and is in hop animation.
-        # It's at its new position and won't move again for a full cycle.
+        # anim=0 means enemy is in HOP ANIMATION (lasts ~17 frames).
+        # Grid word updates during this phase — enemy is transitioning
+        # to its next position. Block both current AND next position.
         if anim == 0:
             anim = COILY_RELOAD if etype == "coily" else BALL_RELOAD
+            # Add a second entity at the predicted next position
+            if etype == "coily":
+                qr, qc = state.qbert
+                qprev = state.qbert_prev
+                target = qprev if pos_e != qprev else (qr, qc)
+                nr, nc = predict_coily(pos_e[0], pos_e[1], target[0], target[1])
+                if is_valid(nr, nc):
+                    enemies.append([
+                        (nr, nc), pos_e, anim, etype,
+                        e.direction_bits, e.flags,
+                    ])
+            elif etype == "ball":
+                if e.direction_bits & 1:
+                    nr, nc = pos_e[0] + 1, pos_e[1] + 1
+                else:
+                    nr, nc = pos_e[0] + 1, pos_e[1]
+                if is_valid(nr, nc):
+                    enemies.append([
+                        (nr, nc), pos_e, anim, etype,
+                        e.direction_bits >> 1, e.flags,
+                    ])
         else:
             anim = max(anim, 1)
 
@@ -121,12 +142,8 @@ def _is_sequence_safe(state, actions):
             e.direction_bits, e.flags,
         ])
 
-    # Initial check: are we already on top of an enemy?
-    for en in enemies:
-        if not is_valid(en[0][0], en[0][1]):
-            continue
-        if _sim_check_collision(qpos, qprev, en[0], en[1]):
-            return False
+    # No initial collision check — if Q*bert is alive in the game,
+    # trust that. Collision Y may have saved it even if grid words match.
 
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
@@ -203,44 +220,55 @@ def decide_survive(state):
     if not valid:
         return DOWN
 
-    # When Coily is active, route toward nearest disc
     coily = _find_coily(state)
-    route = _target
-    if coily and state.discs:
-        best_dd = 999
-        for disc in state.discs:
-            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
-            if dd < best_dd:
-                best_dd = dd
-                route = disc.jump_from
 
-    # Try all 3-hop sequences, collect safe first moves
-    safe_first_moves = {}  # action -> best distance to target
-
+    # Try all 3-hop sequences toward the TARGET CUBE first
+    safe_first_moves = {}
     for a1, r1, c1 in valid:
         for a2, r2, c2 in neighbors(r1, c1):
             for a3, r3, c3 in neighbors(r2, c2):
                 if _is_sequence_safe(state, [a1, a2, a3]):
-                    d = grid_dist(r1, c1, route[0], route[1]) if route else 0
+                    d = grid_dist(r1, c1, _target[0], _target[1]) if _target else 0
                     if a1 not in safe_first_moves or d < safe_first_moves[a1]:
                         safe_first_moves[a1] = d
 
     if safe_first_moves:
-        # Pick move closest to target
         return min(safe_first_moves, key=safe_first_moves.get)
 
-    # No 3-hop safe sequence — try 1-hop safe moves as fallback
-    for a, r, c in valid:
-        if _is_sequence_safe(state, [a]):
-            return a
-
-    # No safe moves — if at a disc, take it as emergency escape
-    if state.discs:
+    # No safe cube-collecting moves. If Coily active and discs available,
+    # route toward nearest disc as escape plan.
+    if coily and state.discs:
+        # If already at a disc, take it
         for disc in state.discs:
             if (row, col) == disc.jump_from:
                 return disc.direction
 
-    # Nothing safe — return None to signal "wait"
+        # Route toward nearest disc
+        best_dd = 999
+        disc_target = None
+        for disc in state.discs:
+            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+            if dd < best_dd:
+                best_dd = dd
+                disc_target = disc.jump_from
+
+        # Find safe moves toward the disc
+        disc_moves = {}
+        for a1, r1, c1 in valid:
+            if _is_sequence_safe(state, [a1]):
+                d = grid_dist(r1, c1, disc_target[0], disc_target[1])
+                if a1 not in disc_moves or d < disc_moves[a1]:
+                    disc_moves[a1] = d
+        if disc_moves:
+            return min(disc_moves, key=disc_moves.get)
+
+    # No safe moves toward cubes or disc — just pick any safe move
+    # to keep running (Q*bert is faster than Coily)
+    for a, r, c in valid:
+        if _is_sequence_safe(state, [a]):
+            return a
+
+    # Truly stuck — wait
     return None
 
 
