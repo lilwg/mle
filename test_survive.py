@@ -55,8 +55,11 @@ def _is_sequence_safe(state, actions):
     from qbert.predict import predict_coily
 
     HOP_FRAMES = 18  # Q*bert can hop every ~16-18 frames
-    BALL_RELOAD = 43
-    COILY_RELOAD = 47  # measured: Coily hops every 47 frames
+    # Hop triggers at anim=16. Reload is 32. Effective cycle = 32-16 = 16.
+    # Plus ~17 frames of hop animation before next reload.
+    # Total measured cycle: 47 frames. Effective wait: 47-17 = 30 frames.
+    BALL_RELOAD = 27   # 43 total - 16 trigger offset
+    COILY_RELOAD = 31  # 47 total - 16 trigger offset
 
     qpos = state.qbert
     qprev = state.qbert_prev
@@ -119,7 +122,9 @@ def _is_sequence_safe(state, actions):
                 if is_valid(nr, nc):
                     enemies.append([(nr, nc), pos_e, anim, "ball", e.direction_bits >> 1, e.flags])
         else:
-            anim = max(anim, 1)
+            # Hop triggers at anim=16, not 0. Effective frames until hop
+            # is (anim - 16). Ensure minimum 1.
+            anim = max(anim - 16, 1)
 
         # Purple ball at row 6 = about to hatch into Coily immediately
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
@@ -131,8 +136,15 @@ def _is_sequence_safe(state, actions):
             e.direction_bits, e.flags,
         ])
 
-    # No initial collision check — if Q*bert is alive in the game,
-    # trust that. Collision Y may have saved it even if grid words match.
+    # Check if Q*bert's FIRST HOP destination lands on an enemy.
+    # (Skip checking current position — Q*bert is alive there now,
+    # collision Y saved it.)
+    if len(actions) > 0:
+        dr, dc = MOVE_DELTAS[actions[0]]
+        first_dest = (qpos[0] + dr, qpos[1] + dc)
+        for en in enemies:
+            if en[0] == first_dest and is_valid(en[0][0], en[0][1]):
+                return False
 
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
@@ -188,6 +200,11 @@ def _is_sequence_safe(state, actions):
             if _sim_check_collision(qpos, en[0]):
                 return False
 
+    # DEBUG: print if any enemy is at same position as final qpos
+    for en in enemies:
+        if en[0] == qpos and is_valid(en[0][0], en[0][1]):
+            print(f"    SIM-END: q@{qpos} en@{en[0]} anim={en[2]} type={en[3]} → SAFE?!")
+
     return True
 
 
@@ -222,7 +239,15 @@ def decide_survive(state):
                         safe_first_moves[a1] = d
 
     if safe_first_moves:
-        return min(safe_first_moves, key=safe_first_moves.get)
+        best = min(safe_first_moves, key=safe_first_moves.get)
+        # Debug: check if the chosen move goes to a known enemy position
+        dr, dc = MOVE_DELTAS[best]
+        dest = (row + dr, col + dc)
+        for e in state.enemies:
+            if not e.harmless and e.pos == dest and is_valid(dest[0], dest[1]):
+                print(f"  !!! SIM APPROVED MOVE TO ENEMY: {(row,col)}→{dest} "
+                      f"s{e.slot}:{e.etype}@{e.pos} anim={e.anim}")
+        return best
 
     # No safe cube-collecting moves. If Coily active and discs available,
     # route toward nearest disc as escape plan.
@@ -484,6 +509,19 @@ def run():
         if state.qbert == pos_before:
             # Hop didn't register — retry on next iteration
             continue
+
+        # Debug: log every decision with enemies for tracing deaths
+        new_pos = state.qbert
+        for e in state.enemies:
+            if not e.harmless and is_valid(e.pos[0], e.pos[1]):
+                from qbert.strategy import grid_dist as gd2
+                d = gd2(new_pos[0], new_pos[1], e.pos[0], e.pos[1])
+                if d <= 2:
+                    from qbert.sim import MOVE_DELTAS as MD
+                    print(f"  h{hops}: {pos_before}→{new_pos} a={action} "
+                          f"s{e.slot}:{e.etype}@{e.pos} fl={e.flags:#x} "
+                          f"anim={e.anim} d={d}")
+                    break
         hops += 1
 
         # Post-hop: check if we're now on an enemy (death imminent)
