@@ -104,26 +104,10 @@ def _is_sequence_safe(state, actions):
 
         # Ugg/Wrongway detection is handled separately below (off-grid positions)
 
-        # anim=0 means enemy is mid-hop RIGHT NOW — advance it to next pos
-        if anim == 0 and etype != "ugg":
-            if etype == "coily":
-                qr, qc = state.qbert
-                qprev = state.qbert_prev
-                target = qprev if pos_e != qprev else (qr, qc)
-                nr, nc = predict_coily(pos_e[0], pos_e[1], target[0], target[1])
-                if is_valid(nr, nc):
-                    prev_e = pos_e
-                    pos_e = (nr, nc)
-                anim = COILY_RELOAD
-            else:
-                if e.direction_bits & 1:
-                    nr, nc = pos_e[0] + 1, pos_e[1] + 1
-                else:
-                    nr, nc = pos_e[0] + 1, pos_e[1]
-                if is_valid(nr, nc):
-                    prev_e = pos_e
-                    pos_e = (nr, nc)
-                anim = BALL_RELOAD
+        # anim=0 means enemy JUST HOPPED and is in hop animation.
+        # It's at its new position and won't move again for a full cycle.
+        if anim == 0:
+            anim = COILY_RELOAD if etype == "coily" else BALL_RELOAD
         else:
             anim = max(anim, 1)
 
@@ -219,24 +203,8 @@ def decide_survive(state):
     if not valid:
         return DOWN
 
-    # Disc override: if at a disc launch point and a CONFIRMED Coily
-    # (fl=0x68 or tracker-confirmed, NOT pre-hatch purple ball) is within 3
-    coily = _find_coily(state)
-    if coily and state.discs:
-        # Verify it's actual Coily, not pre-hatch purple ball
-        real_coily = any(
-            e.etype == "coily" and e.flags == 0x68
-            and is_valid(e.pos[0], e.pos[1])
-            for e in state.enemies
-        )
-        if real_coily:
-            coily_d = grid_dist(row, col, coily[0], coily[1])
-            if coily_d <= 2:
-                for disc in state.discs:
-                    if (row, col) == disc.jump_from:
-                        return disc.direction
-
     # When Coily is active, route toward nearest disc
+    coily = _find_coily(state)
     route = _target
     if coily and state.discs:
         best_dd = 999
@@ -266,7 +234,13 @@ def decide_survive(state):
         if _is_sequence_safe(state, [a]):
             return a
 
-    # Nothing safe right now — return None to signal "wait"
+    # No safe moves — if at a disc, take it as emergency escape
+    if state.discs:
+        for disc in state.discs:
+            if (row, col) == disc.jump_from:
+                return disc.direction
+
+    # Nothing safe — return None to signal "wait"
     return None
 
 
@@ -412,7 +386,16 @@ def run():
         action = decide_survive(state)
 
         if action is None:
-            # No safe move right now — wait a few frames and re-evaluate
+            # Debug: log state when stuck
+            enemies_near = [(e.slot, e.etype, e.pos, e.flags, e.anim,
+                            grid_dist(pos[0], pos[1], e.pos[0], e.pos[1]))
+                           for e in state.enemies
+                           if not e.harmless and is_valid(e.pos[0], e.pos[1])]
+            at_disc = any(pos == d.jump_from for d in state.discs)
+            if enemies_near:
+                print(f"  STUCK hop {hops}: Q@{pos} at_disc={at_disc}")
+                for s, et, ep, ef, ea, d in enemies_near:
+                    print(f"    s{s}:{et} @{ep} fl={ef:#x} anim={ea} d={d}")
             for _ in range(6):
                 data = env.step()
             continue
@@ -438,17 +421,12 @@ def run():
                 break
 
         if is_disc:
-            # Verify Q*bert is actually at the disc position (not a stale read)
+            # Verify Q*bert is actually at the disc position
             actual_pos = read_state(data, tracker).qbert
             if actual_pos != disc.jump_from:
                 data = env.step()
                 continue
-            # Verify disc is still available in RAM
-            d_avail = data.get(f"disc{'0' if 'left' in disc.side else '1'}_avail", 0)
-            if not d_avail:
-                data = env.step()
-                continue
-            print(f"  DISC: pos={pos} side={disc.side} avail={d_avail}")
+            print(f"  DISC: pos={pos} side={disc.side}")
             port, field = MOVE_BUTTONS[action]
             env.step_n(port, field, 6)
             # Wait for disc ride to complete — Q*bert should end at (0,0)
