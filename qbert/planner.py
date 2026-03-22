@@ -142,7 +142,7 @@ def _search_routes(state, visited, max_depth=7):
     start = state.qbert
     coily = _find_coily(state)
 
-    # (row, col, step, first_action, visited_in_path set, new_cubes)
+    # (row, col, step, first_action, recent_path list, new_cubes)
     q = deque()
 
     # Step 1: expand from start
@@ -154,11 +154,10 @@ def _search_routes(state, visited, max_depth=7):
         coily_d = grid_dist(nr, nc, coily[0], coily[1]) if coily else 99
         escape = len(neighbors(nr, nc))
         routes.append((action, new, escape, 1, coily_d))
-        path_set = frozenset({start, (nr, nc)})
-        q.append((nr, nc, 1, action, path_set, new))
+        q.append((nr, nc, 1, action, [start, (nr, nc)], new))
 
     while q:
-        cr, cc, step, first_action, path_set, new_cubes = q.popleft()
+        cr, cc, step, first_action, path, new_cubes = q.popleft()
         if step >= max_depth:
             continue
 
@@ -168,8 +167,8 @@ def _search_routes(state, visited, max_depth=7):
         for _, nr, nc in neighbors(cr, cc):
             if (nr, nc) in danger:
                 continue
-            # Avoid revisiting recent path positions (loop avoidance)
-            if (nr, nc) in path_set:
+            # Only avoid last 4 positions (allow some backtracking)
+            if (nr, nc) in path[-4:]:
                 continue
 
             new = new_cubes + (1 if not visited.get((nr, nc), False) else 0)
@@ -178,8 +177,7 @@ def _search_routes(state, visited, max_depth=7):
             routes.append((first_action, new, escape, next_step, coily_d))
 
             if next_step < max_depth:
-                new_path = path_set | {(nr, nc)}
-                q.append((nr, nc, next_step, first_action, new_path, new))
+                q.append((nr, nc, next_step, first_action, path + [(nr, nc)], new))
 
     return routes
 
