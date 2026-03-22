@@ -75,6 +75,8 @@ def _enemy_dangers_at_step(state, qbert_step, qbert_positions):
     since we don't know exactly when during the step the enemy hops.
     """
     dangers = set()
+    # How many frames elapse by this Q*bert step
+    elapsed_frames = qbert_step * QBERT_HOP_FRAMES
 
     for e in state.enemies:
         if e.harmless:
@@ -83,17 +85,20 @@ def _enemy_dangers_at_step(state, qbert_step, qbert_positions):
             continue
 
         r, c = e.pos
+        # Always block current position
+        dangers.add((r, c))
+        # Also block previous position (mid-hop collision)
+        if is_valid(e.prev_pos[0], e.prev_pos[1]):
+            dangers.add(e.prev_pos)
 
         if e.etype == "coily":
-            # How many Coily hops in qbert_step Q*bert hops?
-            coily_hops = int((qbert_step * QBERT_HOP_FRAMES) / COILY_HOP_FRAMES) + 1
+            # How many Coily hops by this frame?
+            coily_hops = elapsed_frames // COILY_HOP_FRAMES
             cr, cc = r, c
-            dangers.add((cr, cc))
-            for h in range(min(coily_hops, qbert_step)):
+            for h in range(coily_hops):
                 target = state.qbert_prev
                 if (cr, cc) == target:
                     target = state.qbert
-                # Use Q*bert's predicted position for later hops
                 if h < len(qbert_positions):
                     target = qbert_positions[h]
                 nr, nc = predict_coily(cr, cc, target[0], target[1])
@@ -102,9 +107,8 @@ def _enemy_dangers_at_step(state, qbert_step, qbert_positions):
                 dangers.add((nr, nc))
                 cr, cc = nr, nc
         else:
-            # Ball: predict path using direction bits
-            dangers.add((r, c))
-            ball_hops = int((qbert_step * QBERT_HOP_FRAMES) / BALL_HOP_FRAMES) + 1
+            # Ball: predict path
+            ball_hops = elapsed_frames // BALL_HOP_FRAMES
             br, bc = r, c
             bits = e.direction_bits
             for h in range(min(ball_hops, 7)):
@@ -118,8 +122,8 @@ def _enemy_dangers_at_step(state, qbert_step, qbert_positions):
                 dangers.add((nr, nc))
                 br, bc = nr, nc
 
-    # Spawn points
-    if state.spawn_countdown < QBERT_HOP_FRAMES * 3:
+    # Spawn points — only block if spawn happens during this hop
+    if state.spawn_countdown < QBERT_HOP_FRAMES:
         dangers.update(SPAWN_POINTS)
 
     return dangers
