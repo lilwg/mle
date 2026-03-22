@@ -137,6 +137,13 @@ def _is_sequence_safe(state, actions):
             e.direction_bits, e.flags,
         ])
 
+    # Initial check: are we already on top of an enemy?
+    for en in enemies:
+        if not is_valid(en[0][0], en[0][1]):
+            continue
+        if _sim_check_collision(qpos, qprev, en[0], en[1]):
+            return False
+
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
         nr, nc = qpos[0] + dr, qpos[1] + dc
@@ -224,7 +231,7 @@ def decide_survive(state):
         )
         if real_coily:
             coily_d = grid_dist(row, col, coily[0], coily[1])
-            if coily_d <= 3:
+            if coily_d <= 1:
                 for disc in state.discs:
                     if (row, col) == disc.jump_from:
                         return disc.direction
@@ -431,6 +438,10 @@ def run():
                 break
 
         if is_disc:
+            # Debug: show disc data
+            print(f"  DISC trigger: pos={pos} disc={disc} "
+                  f"d0a={data.get('disc0_avail',0)} d0r={data.get('disc0_row',0)} "
+                  f"d1a={data.get('disc1_avail',0)} d1r={data.get('disc1_row',0)}")
             port, field = MOVE_BUTTONS[action]
             env.step_n(port, field, 6)
             # Wait for disc ride to complete — Q*bert should end at (0,0)
