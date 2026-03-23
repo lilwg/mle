@@ -278,12 +278,18 @@ def is_sequence_safe(state, actions):
     qpos, qprev = state.qbert, state.qbert_prev
     enemies = _build_sim_enemies(state)
 
-    # Check first-hop destination isn't occupied
+    # Check first-hop destination isn't occupied or cross-matched
     if actions:
         dr, dc = MOVE_DELTAS[actions[0]]
         dest = (qpos[0] + dr, qpos[1] + dc)
         for en in enemies:
-            if en[0] == dest and is_valid(dest[0], dest[1]):
+            if not is_valid(en[0][0], en[0][1]):
+                continue
+            # Same position
+            if en[0] == dest:
+                return False
+            # Cross-match: landing on enemy's prev while enemy is on our prev
+            if en[1] == dest and en[0] == qpos:
                 return False
 
     for action in actions:
@@ -307,6 +313,7 @@ def is_sequence_safe(state, actions):
 
         # Phase 2: grounded at destination (10 frames). Check collision
         # as enemies arrive. Q*bert can't move yet (waiting for qb_anim).
+        # ROM $BD4C-$BD66 collision: current==current OR cross-match OR overlap
         for _ in range(10):
             for en in enemies:
                 if not is_valid(en[0][0], en[0][1]):
@@ -314,7 +321,13 @@ def is_sequence_safe(state, actions):
                 en[2] -= 1
                 if en[2] <= 0:
                     _step_enemy(en, qpos, qprev)
+                # ROM collision checks:
+                # 1. Q*bert pos == enemy pos (same cube)
                 if qpos == en[0]:
+                    return False
+                # 2. Cross-match: Q*bert pos == enemy prev AND
+                #    Q*bert prev == enemy pos (swapped during hop)
+                if qpos == en[1] and qprev == en[0]:
                     return False
 
     return True
