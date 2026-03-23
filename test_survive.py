@@ -116,19 +116,10 @@ def grid_dist(r1, c1, r2, c2):
 
 
 def wait_until_ready(env):
-    """Wait until Q*bert can accept input (qb_anim >= 16).
-    Must not return with anim=0 (mid-hop) — button presses get lost."""
-    data = None
-    for _ in range(60):
+    """Wait until Q*bert can accept input (qb_anim >= 16)."""
+    for _ in range(35):
         data = env.step()
-        anim = data.get("qb_anim", 0)
-        if anim >= 16:
-            return data
-    # Timeout — wait a full additional hop cycle
-    for _ in range(30):
-        data = env.step()
-        anim = data.get("qb_anim", 0)
-        if anim >= 16:
+        if data.get("qb_anim", 0) >= 16:
             return data
     return data
 
@@ -287,19 +278,13 @@ def is_sequence_safe(state, actions):
     qpos, qprev = state.qbert, state.qbert_prev
     enemies = _build_sim_enemies(state)
 
-    # Check first-hop destination isn't occupied or adjacent to Coily
+    # Check first-hop destination isn't occupied
     if actions:
         dr, dc = MOVE_DELTAS[actions[0]]
         dest = (qpos[0] + dr, qpos[1] + dc)
         for en in enemies:
-            if not is_valid(en[0][0], en[0][1]):
-                continue
-            if en[0] == dest:
+            if en[0] == dest and is_valid(dest[0], dest[1]):
                 return False
-            # Coily within 1 hop of destination + low anim = danger
-            if en[3] == "coily" and en[2] <= 5:
-                if grid_dist(dest[0], dest[1], en[0][0], en[0][1]) <= 1:
-                    return False
 
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
@@ -316,18 +301,13 @@ def is_sequence_safe(state, actions):
                 if en[2] <= 0:
                     _step_enemy(en, qpos, qprev)
 
-        # Check destination is clear before landing
-        for en in enemies:
-            if en[0] == (nr, nc) and is_valid(en[0][0], en[0][1]):
-                return False
-
         # Q*bert lands at destination
         qprev = qpos
         qpos = (nr, nc)
 
-        # Phase 2: grounded at destination (14 frames). Check collision
+        # Phase 2: grounded at destination (10 frames). Check collision
         # as enemies arrive. Q*bert can't move yet (waiting for qb_anim).
-        for _ in range(14):
+        for _ in range(10):
             for en in enemies:
                 if not is_valid(en[0][0], en[0][1]):
                     continue
@@ -336,15 +316,6 @@ def is_sequence_safe(state, actions):
                     _step_enemy(en, qpos, qprev)
                 if qpos == en[0]:
                     return False
-
-        # Safety margin: if any enemy is distance 1 from Q*bert after
-        # the grounded phase, consider it unsafe (timing errors can cause
-        # collisions within 1 hop of prediction error)
-        for en in enemies:
-            if not is_valid(en[0][0], en[0][1]):
-                continue
-            if en[3] in ("coily", "ball") and grid_dist(qpos[0], qpos[1], en[0][0], en[0][1]) == 0:
-                return False
 
     return True
 
@@ -414,11 +385,6 @@ def decide(state, hops_since_progress):
 
     coily = find_coily(state)
     coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
-
-    # ── Spawn safety: enemies spawn at (1,0) and (1,1). If at (0,0)
-    # and spawn is imminent, wait instead of hopping into the spawn zone ──
-    if row <= 1 and state.spawn_countdown < 10:
-        return None  # wait for spawn to pass
 
     # ── Disc: take when at launch point with Coily close ──
     if coily and state.discs and coily_d <= 2:
@@ -504,8 +470,7 @@ def execute_disc(env, action, tracker, used_discs, disc):
     state = read_state(data, tracker)
     # Verify Q*bert is still at the disc launch position
     if state.qbert != disc.jump_from:
-        # Q*bert moved during wait — abort disc ride
-        return None, None  # signal failure
+        return None, None  # Q*bert moved during wait — abort
     env.step_n(port, field, BUTTON_HOLD)
     used_discs.add(disc.side)
     data = env.wait(300)
@@ -516,16 +481,7 @@ def execute_disc(env, action, tracker, used_discs, disc):
         if is_valid(state.qbert[0], state.qbert[1]) and state.qbert[0] <= 1:
             break
     data = wait_until_landed(env)
-    state = read_state(data, tracker)
-    # Safety: wait at (0,0) if a spawn is imminent (spawn_countdown low).
-    # Enemies spawn at (0,0) / (-1,0) area — if we hop immediately we may
-    # collide with a spawning ball.
-    for _ in range(60):
-        if state.spawn_countdown > 10:
-            break
-        data = env.step()
-        state = read_state(data, tracker)
-    return data, state
+    return data, read_state(data, tracker)
 
 
 def run():
@@ -614,7 +570,7 @@ def run():
                                 f" prev={e.prev_pos} cy={e.coll_y}"
                                 f"{' HARMLESS' if e.harmless else ''}")
                 # Raw slot dump — catch enemies invisible to state parser
-                if True:
+                if current_level >= 3:
                     for n in range(10):
                         fl = data.get(f"e{n}_flags", 0)
                         st_raw = data.get(f"e{n}_st", 0)
@@ -685,7 +641,6 @@ def run():
             if disc_match:
                 data, state = execute_disc(env, action, tracker, used_discs, disc_match)
                 if data is None:
-                    # Disc ride aborted — Q*bert moved during wait
                     data = env.step()
                     state = read_state(data, tracker)
                     continue
@@ -752,7 +707,7 @@ def run():
                 cd = grid_dist(pos[0], pos[1], coily[0], coily[1]) if coily else 99
                 tgt = pick_target(state)
                 enemies_str = " ".join(
-                    f"{e.etype[0]}{e.pos}a{e.anim}{'!' if e.pos==state.qbert else ''}"
+                    f"{e.etype[0]}{e.pos}{'!' if e.pos==state.qbert else ''}"
                     for e in state.enemies
                     if not e.harmless
                 )
