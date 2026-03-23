@@ -83,19 +83,30 @@ def _build_sim_enemies(state):
     qpos, qprev = state.qbert, state.qbert_prev
     enemies = []
 
-    # Ugg/Wrongway: off-grid → block adjacent edge cubes
+    # Ugg/Wrongway: off-grid positions → map to adjacent on-grid cubes.
+    # ROM $B870: uses direction_bits like balls. bit0=1→DOWN(row+1), bit0=0→UP(row-1).
+    # Block current adjacent cube AND predicted next adjacent cube.
     for e in state.enemies:
         if e.harmless:
             continue
         r, c = e.pos
-        if c < 0:  # left face
-            for dr in (-1, 0, 1):
-                if is_valid(r + dr, 0):
-                    enemies.append([(r + dr, 0), (r + dr, 0), 999, "ugg", 0, 0])
-        elif r >= 0 and c > r:  # right face
-            for dr in (-1, 0, 1):
-                if is_valid(r + dr, r + dr):
-                    enemies.append([(r + dr, r + dr), (r + dr, r + dr), 999, "ugg", 0, 0])
+        if c < 0:  # left face → dangerous to col=0 cubes
+            anim = max(e.anim - 16, 1) if e.anim > 0 else BALL_RELOAD
+            edge_pos = (r, 0)
+            if is_valid(r, 0):
+                enemies.append([edge_pos, edge_pos, anim, "ugg", e.direction_bits, e.flags])
+                # Also block predicted next row
+                nr = r + 1 if (e.direction_bits & 1) else r - 1
+                if is_valid(nr, 0):
+                    enemies.append([(nr, 0), edge_pos, anim, "ugg", e.direction_bits >> 1, e.flags])
+        elif r >= 0 and c > r:  # right face → dangerous to col=row cubes
+            anim = max(e.anim - 16, 1) if e.anim > 0 else BALL_RELOAD
+            edge_pos = (r, r)
+            if is_valid(r, r):
+                enemies.append([edge_pos, edge_pos, anim, "ugg", e.direction_bits, e.flags])
+                nr = r + 1 if (e.direction_bits & 1) else r - 1
+                if is_valid(nr, nr):
+                    enemies.append([(nr, nr), edge_pos, anim, "ugg", e.direction_bits >> 1, e.flags])
 
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
@@ -141,7 +152,21 @@ def _step_enemy(en, qpos, qprev):
     epos, etype = en[0], en[3]
 
     if etype == "ugg":
-        en[2] = 999
+        # Ugg moves on cube face: bit0=1→DOWN(row+1), bit0=0→UP(row-1)
+        # Grid word: DOWN adds (1,1), UP subtracts gw0 by 1
+        # We track adjacent on-grid cubes, so just update the row
+        dbits = en[4]
+        if dbits & 1:
+            new_pos = (epos[0] + 1, epos[1])  # row+1, same edge col
+        else:
+            new_pos = (epos[0] - 1, epos[1])  # row-1, same edge col
+        en[4] = dbits >> 1
+        en[2] = BALL_RELOAD  # same timing as balls
+        if is_valid(new_pos[0], new_pos[1]):
+            en[1] = epos
+            en[0] = new_pos
+        else:
+            en[0] = (-1, -1)
         return
 
     if etype == "coily":
