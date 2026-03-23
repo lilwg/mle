@@ -330,11 +330,24 @@ def decide(state, hops_since_progress):
     coily = find_coily(state)
     coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
 
-    # ── Disc: take when at launch point with Coily close ──
+    # ── Disc: take when at launch point and Coily will follow to its death ──
+    # Coily chases Q*bert's previous position. If Q*bert takes a disc from
+    # the edge, Coily will hop toward that position and fall off.
+    # Take the disc when: (1) at launch point, (2) Coily is close enough
+    # that its next hop(s) will reach the disc position and fall off.
     if coily and state.discs and coily_d <= 2:
         for disc in state.discs:
             if (row, col) == disc.jump_from:
-                return disc.direction
+                # Predict: will Coily reach this position and fall?
+                # Coily targets qbert_prev. After disc ride, Q*bert's prev
+                # is the disc launch point. Coily will path toward it.
+                # At distance 1, Coily's next hop goes to our position.
+                # At distance 2, Coily needs 2 hops but will still follow.
+                if coily_d <= 1:
+                    return disc.direction  # guaranteed kill
+                # Distance 2: take disc as last resort if stuck
+                if hops_since_progress >= DISC_STALL_THRESHOLD:
+                    return disc.direction
 
     # ── Pick routing target ──
     # No Coily → target corners while safe
@@ -417,8 +430,8 @@ def execute_disc(env, action, tracker, used_discs, disc):
         return None, None  # Q*bert moved during wait — abort
     env.step_n(port, field, BUTTON_HOLD)
     used_discs.add(disc.side)
-    data = env.wait(300)
-    # Wait until Q*bert arrives at the top
+    # Poll until Q*bert arrives at (0,0) — no fixed wait
+    data = env.step()
     for _ in range(300):
         data = env.step()
         state = read_state(data, tracker)
@@ -477,7 +490,12 @@ def run():
                 hops_since_progress = 0
                 last_cubes = 0
                 tracker.reset()
-                env.wait(300)
+                # Wait for level transition — poll instead of fixed wait
+                for _ in range(600):
+                    data = env.step()
+                    state = read_state(data, tracker)
+                    if state.remaining_cubes > 0 and is_valid(state.qbert[0], state.qbert[1]):
+                        break
                 data, state = wait_for_level_start(env, tracker)
                 prev_lives = state.lives
                 hops = 1
@@ -554,7 +572,12 @@ def run():
                 prev_lives = state.lives
                 tracker.reset()
                 hops_since_progress = 0
-                data = env.wait(300)
+                # Wait for death animation — poll until Q*bert is valid again
+                for _ in range(300):
+                    data = env.step()
+                    state = read_state(data, tracker)
+                    if is_valid(state.qbert[0], state.qbert[1]) and data.get("qb_anim", 0) >= 16:
+                        break
                 state = read_state(data, tracker)
                 hops = 0
                 continue
