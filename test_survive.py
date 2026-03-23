@@ -116,10 +116,19 @@ def grid_dist(r1, c1, r2, c2):
 
 
 def wait_until_ready(env):
-    """Wait until Q*bert can accept input (qb_anim >= 16)."""
-    for _ in range(35):
+    """Wait until Q*bert can accept input (qb_anim >= 16).
+    Must not return with anim=0 (mid-hop) — button presses get lost."""
+    data = None
+    for _ in range(60):
         data = env.step()
-        if data.get("qb_anim", 0) >= 16:
+        anim = data.get("qb_anim", 0)
+        if anim >= 16:
+            return data
+    # Timeout — wait a full additional hop cycle
+    for _ in range(30):
+        data = env.step()
+        anim = data.get("qb_anim", 0)
+        if anim >= 16:
             return data
     return data
 
@@ -491,7 +500,12 @@ def execute_hop(env, action):
 def execute_disc(env, action, tracker, used_discs, disc):
     """Take a disc ride: wait until ready, press, wait for arrival at (0,0)."""
     port, field = MOVE_BUTTONS[action]
-    wait_until_ready(env)
+    data = wait_until_ready(env)
+    state = read_state(data, tracker)
+    # Verify Q*bert is still at the disc launch position
+    if state.qbert != disc.jump_from:
+        # Q*bert moved during wait — abort disc ride
+        return None, None  # signal failure
     env.step_n(port, field, BUTTON_HOLD)
     used_discs.add(disc.side)
     data = env.wait(300)
@@ -516,7 +530,7 @@ def execute_disc(env, action, tracker, used_discs, disc):
 
 def run():
     env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False,
-                  throttle=False)
+                  throttle=True)
     tracker = EnemyTracker()
 
     # Start game (randomize wait to vary MAME RNG seed)
@@ -670,6 +684,11 @@ def run():
 
             if disc_match:
                 data, state = execute_disc(env, action, tracker, used_discs, disc_match)
+                if data is None:
+                    # Disc ride aborted — Q*bert moved during wait
+                    data = env.step()
+                    state = read_state(data, tracker)
+                    continue
                 hops += 1
                 hops_since_progress = 0
                 cubes = NUM_CUBES - state.remaining_cubes
