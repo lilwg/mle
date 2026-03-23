@@ -122,11 +122,9 @@ def _is_sequence_safe(state, actions):
                 if is_valid(nr, nc):
                     enemies.append([(nr, nc), pos_e, anim, "ball", e.direction_bits >> 1, e.flags])
         else:
-            # Coily hops when anim reaches 16 (not 0). Balls hop at 0.
-            if etype == "coily":
-                anim = max(anim - 16, 1)
-            else:
-                anim = max(anim, 1)
+            # All enemies hop when anim reaches 16, not 0.
+            # Effective frames until hop = anim - 16.
+            anim = max(anim - 16, 1)
 
         # Purple ball at row 6 = about to hatch into Coily immediately
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
