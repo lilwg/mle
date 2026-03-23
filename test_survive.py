@@ -22,8 +22,8 @@ ROMS_PATH = "/Users/pat/mame/roms"
 
 BUTTON_HOLD = 6         # frames to hold direction button
 HOP_FRAMES = 18         # frames per Q*bert hop cycle
-COILY_RELOAD = 43       # Measured: 12 wait + 1 trigger + 30 flight = 43 frames/hop
-BALL_RELOAD = 43         # Same cycle for balls (reload values differ but total is same)
+COILY_RELOAD = 46       # Measured: Coily reload=32, wait 32→16 (16f) + 30f flight = 46
+BALL_RELOAD = 43         # Measured: Ball reload=28, wait 28→16 (12f) + 30f flight = 43
 DISC_STALL_THRESHOLD = 5 # hops without progress before routing to disc
 DEAD_END_CORNERS = {(6, 0), (6, 6)}
 
@@ -127,10 +127,14 @@ def _build_sim_enemies(state):
             if next_pos and is_valid(next_pos[0], next_pos[1]):
                 enemies.append([next_pos, pos_e, anim, etype, e.direction_bits, e.flags])
         else:
-            # Wait phase: anim counts 28→16 (12 frames), then triggers hop.
-            # After trigger: 30 frames of flight. Total to next landing:
-            # (anim - 16) + 30 frames = anim + 14
-            anim = max(anim - 16, 0) + 30
+            # Wait phase: anim counts reload→16, then triggers hop + 30f flight.
+            # Pre-hatch balls have very high anim (70+) from initial spawn fall.
+            if anim > 40:
+                # Pre-hatch/spawn animation — estimate conservatively
+                anim = anim  # raw countdown, entity won't hop until anim=16
+            else:
+                # Normal wait: (anim - 16) ticks wait + 30 flight
+                anim = max(anim - 16, 0) + 30
 
         # Purple ball at bottom with Coily flags → about to hatch
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
@@ -444,7 +448,7 @@ def execute_disc(env, action, tracker, used_discs, disc):
 
 def run():
     env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False,
-                  throttle=False)
+                  throttle=True)
     tracker = EnemyTracker()
 
     # Start game (randomize wait to vary MAME RNG seed)
