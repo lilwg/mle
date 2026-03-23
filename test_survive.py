@@ -212,6 +212,11 @@ def _find_coily(state):
     for e in state.enemies:
         if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
             return e.pos
+    # Also check for entities with Coily-family flags at bottom rows
+    # (fl=0x60 that just hatched, tracker hasn't confirmed yet)
+    for e in state.enemies:
+        if e.flags in (0x60, 0x68, 0x6a, 0x62) and e.pos[0] >= 5 and is_valid(e.pos[0], e.pos[1]):
+            return e.pos
     return None
 
 
@@ -243,6 +248,22 @@ def decide_survive(state):
     if coily:
         avoid = {(6, 0), (6, 6)}
 
+    # Use disc when stuck (no progress in 15+ hops) and Coily not adjacent
+    if coily and state.discs and _hops_since_cube >= 15:
+        coily_d = grid_dist(row, col, coily[0], coily[1])
+        for disc in state.discs:
+            if (row, col) == disc.jump_from and coily_d >= 2:
+                return disc.direction
+        # Route toward nearest disc
+        best_dd = 999
+        disc_target = None
+        for disc in state.discs:
+            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+            if dd < best_dd:
+                best_dd = dd
+                disc_target = disc.jump_from
+        target = disc_target
+
     # Try all 3-hop sequences toward target
     safe_first_moves = {}
     for a1, r1, c1 in valid:
@@ -258,7 +279,7 @@ def decide_survive(state):
     if safe_first_moves:
         return min(safe_first_moves, key=safe_first_moves.get)
 
-    # No safe cube moves but discs available — try 3-hop toward disc
+    # No safe moves — try to reach disc
     if coily and state.discs:
         best_dd = 999
         disc_target = None
@@ -326,6 +347,8 @@ def decide_survive(state):
 # Current target cube
 _target = None
 _level_active = False
+_hops_since_cube = 0
+_last_cubes = 0
 
 
 def _pick_target(state):
@@ -384,8 +407,10 @@ def run():
     prev_lives = state.lives
     hops = 0
     used_discs = set()
-    global _level_active
+    global _level_active, _hops_since_cube, _last_cubes
     _level_active = False
+    _hops_since_cube = 0
+    _last_cubes = 0
 
     for _ in range(5000):
         state = read_state(data, tracker)
@@ -546,6 +571,14 @@ def run():
         if state.qbert == pos_before:
             # Hop didn't register — retry on next iteration
             continue
+
+        # Track progress
+        new_cubes = NUM_CUBES - state.remaining_cubes
+        if new_cubes > _last_cubes:
+            _hops_since_cube = 0
+            _last_cubes = new_cubes
+        else:
+            _hops_since_cube += 1
 
         # Debug: log every decision with enemies for tracing deaths
         new_pos = state.qbert
