@@ -247,25 +247,25 @@ def read_state(data, tracker=None):
         else:
             is_coily = going_up
 
-        # Classify enemy type using flags byte and tracker
-        # Flags byte bits 1-2 (mask 0x06): >= 4 means Sam/Slick (harmless)
-        # BUT Ugg/Wrongway (fl=0x25/0x27) also have flag_type >= 4!
-        # Distinguish by position: Ugg is off-grid (col < 0 or col > row).
-        # fl=0x68: definitively hatched Coily (flags change from 0x60 to 0x68 at hatch)
+        # Classify enemy type using flags byte and tracker.
+        # ROM collision $BD41: flag_type >= 4 → Sam/Slick handler (harmless).
+        # This applies regardless of position — Sam on a pyramid face is still harmless.
+        # Actual Ugg flags: 0x25 (right), 0x27 (left) — these have flag_type=4/6
+        # but are deadly. However they also have fl & 0xE0 = 0x20, same as balls.
+        # The ROM at $BD72 checks [di+0xF] (hops_remaining) for Sam collision.
         flag_type = flags & 0x06
         off_grid = not is_valid(pos[0], pos[1])
-        # Ugg/Wrongway: off-grid on pyramid FACES (row 1-7, col < 0 or col > row).
-        # NOT spawn point (row < 0) and not far past the pyramid (row > 7).
-        # Ghost entries have stale positions at row 10+ — exclude those.
         on_face = (off_grid and 1 <= pos[0] <= 7
                    and (pos[1] < 0 or pos[1] > pos[0]))
-        if on_face:
-            etype = "ugg"
-            harmless = False
-        elif flag_type >= 4:
-            # Sam/Slick: harmless green enemies (on-grid, flags & 0x06 >= 4)
-            etype = "sam"
-            harmless = True
+        if flag_type >= 4:
+            if flags in (0x25, 0x27):
+                # Ugg (0x25) / Wrongway (0x27): deadly, on pyramid faces
+                etype = "ugg"
+                harmless = False
+            else:
+                # Sam/Slick: harmless (fl=0x44, 0x46, 0x4A, etc.)
+                etype = "sam"
+                harmless = True
         elif flags == 0x68 or is_coily or (going_up and flag_type == 0):
             etype = "coily"
             harmless = False
