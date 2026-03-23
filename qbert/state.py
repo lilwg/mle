@@ -223,7 +223,13 @@ def read_state(data, tracker=None):
         pos_check = gw_to_pos(gw0, gw1)
 
         if st == 0:
-            if flags != 0 and anim > 0 and is_valid(pos_check[0], pos_check[1]):
+            on_face_check = (not is_valid(pos_check[0], pos_check[1])
+                             and pos_check[0] >= 1
+                             and (pos_check[1] < 0 or pos_check[1] > pos_check[0]))
+            if on_face_check and flags != 0 and anim > 0:
+                # Ugg/Wrongway: on pyramid face, st flickers — keep if animating
+                pass
+            elif flags != 0 and anim > 0 and is_valid(pos_check[0], pos_check[1]):
                 # Flickering active enemy — include it
                 pass  # fall through to normal processing
             else:
@@ -244,10 +250,20 @@ def read_state(data, tracker=None):
 
         # Classify enemy type using flags byte and tracker
         # Flags byte bits 1-2 (mask 0x06): >= 4 means Sam/Slick (harmless)
+        # BUT Ugg/Wrongway (fl=0x25/0x27) also have flag_type >= 4!
+        # Distinguish by position: Ugg is off-grid (col < 0 or col > row).
         # fl=0x68: definitively hatched Coily (flags change from 0x60 to 0x68 at hatch)
         flag_type = flags & 0x06
-        if flag_type >= 4:
-            # Sam/Slick: harmless green enemies (flags & 0x06 >= 4)
+        off_grid = not is_valid(pos[0], pos[1])
+        # Ugg/Wrongway: off-grid on pyramid FACES (row >= 1, col < 0 or col > row).
+        # NOT spawn point (row < 0) which is where Sam/Slick also spawns.
+        # Any entity on a face is deadly regardless of flags byte.
+        on_face = off_grid and pos[0] >= 1 and (pos[1] < 0 or pos[1] > pos[0])
+        if on_face:
+            etype = "ugg"
+            harmless = False
+        elif flag_type >= 4:
+            # Sam/Slick: harmless green enemies (on-grid, flags & 0x06 >= 4)
             etype = "sam"
             harmless = True
         elif flags == 0x68 or is_coily or (going_up and flag_type == 0):
@@ -258,8 +274,10 @@ def read_state(data, tracker=None):
             harmless = False
 
         coll_y = data.get(f"e{n}_coll_y", 0)
-        # Skip phantom entries: coll_y == 0 means no real screen presence
-        if coll_y == 0:
+        # Skip phantom entries: coll_y == 0 means no real screen presence.
+        # Exception: Ugg/Wrongway are off-grid and may have coll_y == 0
+        # while still being deadly to adjacent edge cubes.
+        if coll_y == 0 and not (on_face and anim > 0):
             continue
 
         enemies.append(Enemy(

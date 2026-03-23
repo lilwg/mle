@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mle import MameEnv
 from qbert.state import (
     QBERT_RAM, read_state, is_valid, EnemyTracker,
-    NUM_CUBES, MAX_ROW, pos_to_cube_index,
+    NUM_CUBES, MAX_ROW, pos_to_cube_index, Disc,
 )
 from qbert.sim import MOVE_DELTAS, UP, DOWN, LEFT, RIGHT
 from qbert.predict import predict_coily
@@ -26,6 +26,82 @@ COILY_RELOAD = 31       # Coily effective hop cycle (47 total - 16 trigger)
 BALL_RELOAD = 27         # Ball effective hop cycle (43 total - 16 trigger)
 DISC_STALL_THRESHOLD = 5 # hops without progress before routing to disc
 DEAD_END_CORNERS = {(6, 0), (6, 6)}
+
+# Disc table: ROM $B990 checks word at [SI + gw0*4] (right) / [SI + gw0*4 + 28]
+# (left). SI is the table base, dynamically located in RAM. We find it on level 1
+# (where discs are known to be row 3 both sides) and re-read it each level.
+
+# Verified disc positions per round.
+# Verified disc positions. Levels not listed fall back to RAM scan.
+_KNOWN_DISCS = {
+    1: [(3, "left"), (3, "right")],
+    2: [(4, "left"), (5, "right")],
+    3: [(3, "left"), (5, "right")],   # confirmed by user
+}
+
+
+def get_level_discs(env, level):
+    """Get disc positions for the current level.
+
+    Uses verified positions for known levels, scans RAM for unknown levels.
+    """
+    positions = _KNOWN_DISCS.get(level)
+    if positions is None:
+        # RAM scan is unreliable — disable discs on unknown levels rather
+        # than risk jumping off the pyramid with wrong positions.
+        print(f"    No known disc positions for level {level}")
+        return []
+    discs = []
+    for row, side in positions:
+        jump_row = row + 1
+        if side == "left":
+            discs.append(Disc(row, "left", (jump_row, 0), LEFT))
+        else:
+            discs.append(Disc(row, "right", (jump_row, jump_row), UP))
+    return discs
+
+
+def _scan_disc_table(env):
+    """Scan RAM for disc table. Returns list of (row, side) tuples."""
+    try:
+        result = env.console.writeln_expect(
+            'local best = ""; local best_base = 0; local best_hits = 99; '
+            'for base = 0x0C00, 0x0FFF do '
+            'local z0 = mem:read_u16(base); '
+            'local z1 = mem:read_u16(base + 4); '
+            'local z7r = mem:read_u16(base + 28); '
+            'local z7l = mem:read_u16(base + 56); '
+            'if z0 == 0 and z1 == 0 and z7r == 0 and z7l == 0 then '
+            'local hits = 0; local rh = 0; local lh = 0; local d = ""; '
+            'for g = 2, 6 do '
+            'if mem:read_u16(base + g*4) ~= 0 then '
+            'hits = hits + 1; rh = rh + 1; d = d .. (g-1) .. "R "; end; '
+            'if mem:read_u16(base + g*4 + 28) ~= 0 then '
+            'hits = hits + 1; lh = lh + 1; d = d .. (g-1) .. "L "; end; '
+            'end; '
+            'if hits >= 2 and hits <= 4 and rh >= 1 and lh >= 1 '
+            'and hits < best_hits then '
+            'best_hits = hits; best = d; best_base = base; '
+            'end; end; end; '
+            'print(string.format("%d ", best_base) .. best)', timeout=5
+        )
+        if result and result.strip():
+            tokens = result.strip().split()
+            base = int(tokens[0])
+            if base > 0:
+                positions = []
+                for token in tokens[1:]:
+                    if len(token) >= 2 and token[-1] in "RL":
+                        row = int(token[:-1])
+                        side = "left" if token[-1] == "L" else "right"
+                        if 1 <= row <= 5:
+                            positions.append((row, side))
+                if len(positions) >= 2:
+                    return positions
+    except Exception as e:
+        print(f"  Disc scan failed: {e}")
+    # Fallback: level 1 pattern
+    return [(3, "left"), (3, "right")]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -153,13 +229,16 @@ def _step_enemy(en, qpos, qprev):
 
     if etype == "ugg":
         # Ugg moves on cube face: bit0=1→DOWN(row+1), bit0=0→UP(row-1)
-        # Grid word: DOWN adds (1,1), UP subtracts gw0 by 1
-        # We track adjacent on-grid cubes, so just update the row
+        # Left side: danger at col=0 (stays 0 regardless of row)
+        # Right side: danger at col=row (col tracks row)
         dbits = en[4]
+        right_side = epos[1] > 0  # col=0 → left, col=row → right
         if dbits & 1:
-            new_pos = (epos[0] + 1, epos[1])  # row+1, same edge col
+            nr = epos[0] + 1
+            new_pos = (nr, nr) if right_side else (nr, 0)
         else:
-            new_pos = (epos[0] - 1, epos[1])  # row-1, same edge col
+            nr = epos[0] - 1
+            new_pos = (nr, nr) if right_side else (nr, 0)
         en[4] = dbits >> 1
         en[2] = BALL_RELOAD  # same timing as balls
         if is_valid(new_pos[0], new_pos[1]):
@@ -326,7 +405,17 @@ def decide(state, hops_since_progress):
             target = disc.jump_from
 
     # ── Positions to avoid (dead-end corners when Coily active) ──
-    avoid = DEAD_END_CORNERS if coily else set()
+    # Exception: don't avoid a corner if it's the last cube (completes the level)
+    avoid = set()
+    if coily:
+        for corner in DEAD_END_CORNERS:
+            idx = pos_to_cube_index(corner[0], corner[1])
+            if idx is not None and state.cube_states[idx] == state.target_color:
+                avoid.add(corner)  # already colored, dangerous dead-end
+            elif state.remaining_cubes <= 1:
+                pass  # last cube — go for it even if it's a corner
+            else:
+                avoid.add(corner)
 
     # ── Search: 3-hop safe sequences toward target ──
     safe_moves = {}
@@ -419,6 +508,8 @@ def run():
     level_active = False
     hops_since_progress = 0
     last_cubes = 0
+    current_level = 1
+    level_discs = get_level_discs(env, current_level)
 
     try:
         for _ in range(50000):
@@ -430,8 +521,9 @@ def run():
                 level_active = True
 
             if level_active and state.remaining_cubes == 0:
-                print(f"\n  === LEVEL COMPLETE at hop {hops}! ===\n")
+                print(f"\n  === LEVEL {current_level} COMPLETE at hop {hops}! ===\n")
                 level_active = False
+                current_level += 1
                 used_discs = set()  # discs reset each level
                 hops_since_progress = 0
                 last_cubes = 0
@@ -440,24 +532,73 @@ def run():
                 data, state = wait_for_level_start(env, tracker)
                 prev_lives = state.lives
                 hops = 1
-                d0a = data.get("disc0_avail", 0)
-                d0r = data.get("disc0_row", 0)
-                d1a = data.get("disc1_avail", 0)
-                d1r = data.get("disc1_row", 0)
-                print(f"  New level: lives={state.lives} Q*bert={state.qbert} "
-                      f"discs: d0={d0a}@r{d0r} d1={d1a}@r{d1r}")
+                # Capture level start screenshot to identify disc positions
+                try:
+                    env.request_frame()
+                    fd = env.step()
+                    if "frame" in fd:
+                        import numpy as np
+                        from PIL import Image
+                        raw = np.frombuffer(fd["frame"], dtype=np.uint8)
+                        bpp = 3 if len(raw) == 256 * 240 * 3 else 4
+                        pixels = raw[:256*240*bpp].reshape(256, 240, bpp)
+                        if bpp == 4:
+                            img = Image.fromarray(pixels[:, :, 2::-1])
+                        else:
+                            img = Image.fromarray(pixels)
+                        img.save(f"level_{current_level}_start.png")
+                    data = fd
+                except Exception:
+                    pass
+                level_discs = get_level_discs(env, current_level)
+                disc_info = ", ".join(f"{d.side}@r{d.row}" for d in level_discs)
+                print(f"  Level {current_level}: lives={state.lives} "
+                      f"Q*bert={state.qbert} discs: {disc_info}")
                 continue
 
             # ── Death handling ──
             if state.lives < prev_lives:
                 killers = ""
                 for e in state.enemies:
-                    if e.harmless:
-                        continue
                     killers += (f"\n    s{e.slot}:{e.etype}@{e.pos}"
                                 f" fl={e.flags:#x} a={e.anim}"
-                                f" prev={e.prev_pos} st={e.state}")
+                                f" prev={e.prev_pos} cy={e.coll_y}"
+                                f"{' HARMLESS' if e.harmless else ''}")
+                # Raw slot dump — catch enemies invisible to state parser
+                if current_level >= 3:
+                    for n in range(10):
+                        fl = data.get(f"e{n}_flags", 0)
+                        st_raw = data.get(f"e{n}_st", 0)
+                        cy = data.get(f"e{n}_coll_y", 0)
+                        if fl != 0 or st_raw != 0:
+                            from qbert.state import gw_to_pos
+                            p = gw_to_pos(data.get(f"e{n}_gw0", 0),
+                                          data.get(f"e{n}_gw1", 0))
+                            killers += (f"\n    RAW s{n}: fl={fl:#04x}"
+                                        f" st={st_raw} pos={p}"
+                                        f" cy={cy} a={data.get(f'e{n}_anim',0)}")
                 print(f"  DIED at hop {hops} @{state.qbert} cubes={cubes}{killers}")
+                # Capture death screenshot
+                try:
+                    env.request_frame()
+                    frame_data = env.step()
+                    if "frame" in frame_data:
+                        import numpy as np
+                        from PIL import Image
+                        raw = np.frombuffer(frame_data["frame"], dtype=np.uint8)
+                        # MAME snapshot_pixels: rotated Q*bert screen
+                        bpp = 3 if len(raw) == 256 * 240 * 3 else 4
+                        h, w = 256, 240
+                        pixels = raw[:h*w*bpp].reshape(h, w, bpp)
+                        if bpp == 4:
+                            img = Image.fromarray(pixels[:, :, 2::-1])  # BGRA→RGB
+                        else:
+                            img = Image.fromarray(pixels)  # already RGB
+                        fname = f"death_L{current_level}_h{hops}.png"
+                        img.save(fname)
+                        print(f"    Screenshot: {fname}")
+                except Exception as e:
+                    print(f"    Screenshot failed: {e}")
                 if state.lives == 0:
                     break
                 prev_lives = state.lives
@@ -474,8 +615,8 @@ def run():
                 data = env.step()
                 continue
 
-            # Filter discs we've already used this level
-            state.discs = [d for d in state.discs if d.side not in used_discs]
+            # Override disc positions (RAM addresses give wrong values for level 2+)
+            state.discs = [d for d in level_discs if d.side not in used_discs]
 
             # ── Decide ──
             action = decide(state, hops_since_progress)
@@ -493,16 +634,12 @@ def run():
                     break
 
             if disc_match:
-                d0r = data.get("disc0_row", 0)
-                d1r = data.get("disc1_row", 0)
-                d0a = data.get("disc0_avail", 0)
-                d1a = data.get("disc1_avail", 0)
                 data, state = execute_disc(env, action, tracker, used_discs, disc_match)
                 hops += 1
                 hops_since_progress = 0
                 cubes = NUM_CUBES - state.remaining_cubes
                 print(f"  #{hops:3d} DISC! {pos}→{state.qbert} "
-                      f"d0={d0a}@r{d0r} d1={d1a}@r{d1r}")
+                      f"({disc_match.side} r{disc_match.row})")
                 continue
 
             # ── Normal hop ──
@@ -539,14 +676,36 @@ def run():
             else:
                 hops_since_progress += 1
 
+            # Dump all active enemy slots on level 3 to find Ugg flags
+            if current_level >= 3:
+                from qbert.state import gw_to_pos
+                ugg_slots = []
+                for n in range(10):
+                    fl = data.get(f"e{n}_flags", 0)
+                    st_raw = data.get(f"e{n}_st", 0)
+                    if fl == 0 and st_raw == 0:
+                        continue
+                    p = gw_to_pos(data.get(f"e{n}_gw0", 0), data.get(f"e{n}_gw1", 0))
+                    # Off-grid = potential Ugg/Wrongway
+                    if not is_valid(p[0], p[1]) and p != (-1, -1):
+                        ugg_slots.append(f"s{n}:fl={fl:#04x}@{p} a={data.get(f'e{n}_anim',0)}")
+                if ugg_slots:
+                    print(f"    OFF-GRID: {' | '.join(ugg_slots)}")
+
             # ── Log ──
-            if hops % 10 == 0:
+            if hops % 10 == 0 or current_level >= 3:
                 coily = find_coily(state)
                 cd = grid_dist(pos[0], pos[1], coily[0], coily[1]) if coily else 99
                 tgt = pick_target(state)
+                enemies_str = " ".join(
+                    f"{e.etype[0]}{e.pos}{'!' if e.pos==state.qbert else ''}"
+                    for e in state.enemies
+                    if not e.harmless
+                )
                 print(f"  hop {hops}: {state.qbert} cubes={new_cubes}/{NUM_CUBES} "
                       f"→{tgt} cd={cd} lives={state.lives} "
-                      f"stuck={hops_since_progress}")
+                      f"stuck={hops_since_progress}"
+                      f"{' ['+enemies_str+']' if current_level >= 3 and enemies_str else ''}")
 
     except KeyboardInterrupt:
         print("\nStopped.")
