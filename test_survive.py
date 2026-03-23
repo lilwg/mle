@@ -22,8 +22,8 @@ ROMS_PATH = "/Users/pat/mame/roms"
 
 BUTTON_HOLD = 6         # frames to hold direction button
 HOP_FRAMES = 18         # frames per Q*bert hop cycle
-COILY_RELOAD = 31       # Coily effective hop cycle (47 total - 16 trigger)
-BALL_RELOAD = 27         # Ball effective hop cycle (43 total - 16 trigger)
+COILY_RELOAD = 24       # ROM $B962: Coily anim reload = 0x18. Full cycle = 24 ticks.
+BALL_RELOAD = 28         # ROM $B6A5: Ball anim reload = 0x1C. Full cycle = 28 ticks.
 DISC_STALL_THRESHOLD = 5 # hops without progress before routing to disc
 DEAD_END_CORNERS = {(6, 0), (6, 6)}
 
@@ -167,7 +167,7 @@ def _build_sim_enemies(state):
             continue
         r, c = e.pos
         if c < 0:  # left face → dangerous to col=0 cubes
-            anim = max(e.anim - 16, 1) if e.anim > 0 else BALL_RELOAD
+            anim = max(e.anim, 1) if e.anim > 0 else 8
             edge_pos = (r, 0)
             if is_valid(r, 0):
                 enemies.append([edge_pos, edge_pos, anim, "ugg", e.direction_bits, e.flags])
@@ -176,7 +176,7 @@ def _build_sim_enemies(state):
                 if is_valid(nr, 0):
                     enemies.append([(nr, 0), edge_pos, anim, "ugg", e.direction_bits >> 1, e.flags])
         elif r >= 0 and c > r:  # right face → dangerous to col=row cubes
-            anim = max(e.anim - 16, 1) if e.anim > 0 else BALL_RELOAD
+            anim = max(e.anim, 1) if e.anim > 0 else 8
             edge_pos = (r, r)
             if is_valid(r, r):
                 enemies.append([edge_pos, edge_pos, anim, "ugg", e.direction_bits, e.flags])
@@ -192,13 +192,17 @@ def _build_sim_enemies(state):
         anim = e.anim
 
         if anim == 0:
-            # Mid-hop animation: block current AND predicted next position
-            anim = COILY_RELOAD if etype == "coily" else BALL_RELOAD
+            # Mid-hop animation: entity is in flight (~8 ticks until landing).
+            # Block current AND predicted next position.
+            anim = 8  # approximate mid-flight
             next_pos = _predict_next(pos_e, etype, e.direction_bits, qpos, qprev)
             if next_pos and is_valid(next_pos[0], next_pos[1]):
                 enemies.append([next_pos, pos_e, anim, etype, e.direction_bits, e.flags])
         else:
-            anim = max(anim - 16, 1)  # hop triggers at anim=16
+            # ROM: anim counts down from reload to 16 (wait), then 0 (flight).
+            # Raw anim = ticks until next landing (wait + flight).
+            # Use raw value directly — RELOAD constants match this scale.
+            anim = max(anim, 1)
 
         # Purple ball at bottom with Coily flags → about to hatch
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
