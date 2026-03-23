@@ -12,12 +12,13 @@ QBERT_RAM = {
     "qb_gw1": 0x0D67,
     "qb_prev0": 0x0D68,
     "qb_prev1": 0x0D69,
-    # Disc data
-    # Disc data (empirically verified — these addresses gave working disc rides)
-    "disc0_avail": 0x0D4C,
-    "disc1_avail": 0x0D4D,
-    "disc0_row": 0x0D4E,
-    "disc1_row": 0x0D51,
+    # Disc table at $0ECC: 14 entries (7 right + 7 left), 4 bytes each.
+    # Non-zero word = disc present. Read as 16-bit: low byte at addr, high at addr+1.
+    # Right discs: $0ECC + gw0*4, Left discs: $0ECC + gw0*4 + 0x1C
+    **{f"disc_r{r}": 0x0ECC + r * 4 for r in range(7)},       # right side
+    **{f"disc_r{r}_hi": 0x0ECC + r * 4 + 1 for r in range(7)},
+    **{f"disc_l{r}": 0x0ECC + r * 4 + 0x1C for r in range(7)}, # left side
+    **{f"disc_l{r}_hi": 0x0ECC + r * 4 + 0x1C + 1 for r in range(7)},
     # Spawn timer: $0085 is 8-bit countdown, spawn happens at 0, reloads from $0D17
     "spawn_countdown": 0x0085,
     # Q*bert animation counter: 0 = mid-hop, >= 16 = ready for next hop
@@ -160,38 +161,32 @@ UP = 0     # Up-Right action
 
 
 def _parse_discs(data):
-    """Parse disc availability and positions from RAM.
+    """Parse disc availability from the disc table at RAM $0ECC.
 
-    ROM $AF3A: 3 disc slots. Availability at $0D4C+n, rows at $0D4F+n.
-    Disc sides alternate: slot 0=left, slot 1=right, slot 2=left.
-    To use: Q*bert jumps off the edge at row = disc_row + 1.
-    Left disc: jump UP-LEFT from (disc_row+1, 0)
-    Right disc: jump UP-RIGHT from (disc_row+1, disc_row+1)
+    ROM-verified: SI=$0ECC is hardcoded. 14 entries (7 right + 7 left),
+    4 bytes each. Non-zero 16-bit word = disc present.
+    Right: $0ECC + row*4, Left: $0ECC + row*4 + $1C.
     """
     discs = []
-    d0_avail = data.get("disc0_avail", 0)
-    d0_row = data.get("disc0_row", 0)
-    d1_avail = data.get("disc1_avail", 0)
-    d1_row = data.get("disc1_row", 0)
-
-    # Verified empirically: both discs work from (d_row+1, edge).
-    # d0 = left disc, d1 = right disc (original assignment was correct).
-    if d0_avail and d0_row > 0:
-        jump_row = d0_row + 1
-        discs.append(Disc(
-            row=d0_row, side="left",
-            jump_from=(jump_row, 0),
-            direction=LEFT,
-        ))
-
-    if d1_avail and d1_row > 0:
-        jump_row = d1_row + 1
-        discs.append(Disc(
-            row=d1_row, side="right",
-            jump_from=(jump_row, jump_row),
-            direction=UP,
-        ))
-
+    for gw0 in range(7):
+        # Right side disc: Q*bert at grid (gw0, gw0) jumps UP-RIGHT
+        lo = data.get(f"disc_r{gw0}", 0)
+        hi = data.get(f"disc_r{gw0}_hi", 0)
+        if lo | hi:
+            discs.append(Disc(
+                row=gw0, side="right",
+                jump_from=(gw0, gw0),
+                direction=UP,
+            ))
+        # Left side disc: Q*bert at grid (gw0, 0) jumps UP-LEFT
+        lo = data.get(f"disc_l{gw0}", 0)
+        hi = data.get(f"disc_l{gw0}_hi", 0)
+        if lo | hi:
+            discs.append(Disc(
+                row=gw0, side="left",
+                jump_from=(gw0, 0),
+                direction=LEFT,
+            ))
     return discs
 
 

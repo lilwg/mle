@@ -27,81 +27,8 @@ BALL_RELOAD = 28         # ROM $B6A5: Ball anim reload = 0x1C. Full cycle = 28 t
 DISC_STALL_THRESHOLD = 5 # hops without progress before routing to disc
 DEAD_END_CORNERS = {(6, 0), (6, 6)}
 
-# Disc table: ROM $B990 checks word at [SI + gw0*4] (right) / [SI + gw0*4 + 28]
-# (left). SI is the table base, dynamically located in RAM. We find it on level 1
-# (where discs are known to be row 3 both sides) and re-read it each level.
-
-# Verified disc positions per round.
-# Verified disc positions. Levels not listed fall back to RAM scan.
-_KNOWN_DISCS = {
-    1: [(3, "left"), (3, "right")],
-    2: [(4, "left"), (5, "right")],
-    3: [(3, "left"), (5, "right")],   # confirmed by user
-}
-
-
-def get_level_discs(env, level):
-    """Get disc positions for the current level.
-
-    Uses verified positions for known levels, scans RAM for unknown levels.
-    """
-    positions = _KNOWN_DISCS.get(level)
-    if positions is None:
-        # RAM scan is unreliable — disable discs on unknown levels rather
-        # than risk jumping off the pyramid with wrong positions.
-        print(f"    No known disc positions for level {level}")
-        return []
-    discs = []
-    for row, side in positions:
-        jump_row = row + 1
-        if side == "left":
-            discs.append(Disc(row, "left", (jump_row, 0), LEFT))
-        else:
-            discs.append(Disc(row, "right", (jump_row, jump_row), UP))
-    return discs
-
-
-def _scan_disc_table(env):
-    """Scan RAM for disc table. Returns list of (row, side) tuples."""
-    try:
-        result = env.console.writeln_expect(
-            'local best = ""; local best_base = 0; local best_hits = 99; '
-            'for base = 0x0C00, 0x0FFF do '
-            'local z0 = mem:read_u16(base); '
-            'local z1 = mem:read_u16(base + 4); '
-            'local z7r = mem:read_u16(base + 28); '
-            'local z7l = mem:read_u16(base + 56); '
-            'if z0 == 0 and z1 == 0 and z7r == 0 and z7l == 0 then '
-            'local hits = 0; local rh = 0; local lh = 0; local d = ""; '
-            'for g = 2, 6 do '
-            'if mem:read_u16(base + g*4) ~= 0 then '
-            'hits = hits + 1; rh = rh + 1; d = d .. (g-1) .. "R "; end; '
-            'if mem:read_u16(base + g*4 + 28) ~= 0 then '
-            'hits = hits + 1; lh = lh + 1; d = d .. (g-1) .. "L "; end; '
-            'end; '
-            'if hits >= 2 and hits <= 4 and rh >= 1 and lh >= 1 '
-            'and hits < best_hits then '
-            'best_hits = hits; best = d; best_base = base; '
-            'end; end; end; '
-            'print(string.format("%d ", best_base) .. best)', timeout=5
-        )
-        if result and result.strip():
-            tokens = result.strip().split()
-            base = int(tokens[0])
-            if base > 0:
-                positions = []
-                for token in tokens[1:]:
-                    if len(token) >= 2 and token[-1] in "RL":
-                        row = int(token[:-1])
-                        side = "left" if token[-1] == "L" else "right"
-                        if 1 <= row <= 5:
-                            positions.append((row, side))
-                if len(positions) >= 2:
-                    return positions
-    except Exception as e:
-        print(f"  Disc scan failed: {e}")
-    # Fallback: level 1 pattern
-    return [(3, "left"), (3, "right")]
+# Disc positions now read directly from RAM $0ECC table by state.py.
+# No hardcoded positions needed. The table is auto-consumed when discs are used.
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -531,7 +458,7 @@ def run():
     hops_since_progress = 0
     last_cubes = 0
     current_level = 1
-    level_discs = get_level_discs(env, current_level)
+    # Discs now read from RAM $0ECC table automatically by state.py
 
     try:
         for _ in range(50000):
@@ -572,8 +499,9 @@ def run():
                     data = fd
                 except Exception:
                     pass
-                level_discs = get_level_discs(env, current_level)
-                disc_info = ", ".join(f"{d.side}@r{d.row}" for d in level_discs)
+                # Discs now read from RAM $0ECC table automatically by state.py
+                state = read_state(data, tracker)
+                disc_info = ", ".join(f"{d.side}@r{d.row}" for d in state.discs)
                 print(f"  Level {current_level}: lives={state.lives} "
                       f"Q*bert={state.qbert} discs: {disc_info}")
                 continue
@@ -637,8 +565,9 @@ def run():
                 data = env.step()
                 continue
 
-            # Override disc positions (RAM addresses give wrong values for level 2+)
-            state.discs = [d for d in level_discs if d.side not in used_discs]
+            # Filter out used discs (state.discs is read fresh from $0ECC each frame,
+            # but game auto-zeroes entries on use, so this is belt-and-suspenders)
+            state.discs = [d for d in state.discs if d.side not in used_discs]
 
             # ── Decide ──
             action = decide(state, hops_since_progress)
