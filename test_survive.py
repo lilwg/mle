@@ -186,24 +186,21 @@ def decide(state, hops_since_progress):
 
     coily = find_coily(state)
 
-    # At a disc launch point? Take it if stuck (no progress).
-    if coily and state.discs and hops_since_progress >= 10:
+    # Disc: take it if at launch point and Coily active
+    if coily and state.discs:
         for disc in state.discs:
             if (row, col) == disc.jump_from:
                 return disc.direction
 
-    # Pick routing target
-    if coily and state.discs and hops_since_progress >= 10:
-        # Route toward disc
-        target = None
+    # Pick target: cube collection by default, disc when stuck
+    target = pick_target(state)
+    if coily and state.discs and hops_since_progress >= 5:
         best_dd = 999
         for disc in state.discs:
             dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
             if dd < best_dd:
                 best_dd = dd
                 target = disc.jump_from
-    else:
-        target = pick_target(state)
 
     # Don't enter dead-end corners when Coily is active
     avoid = set()
@@ -356,7 +353,12 @@ def run():
 
             if is_disc:
                 port, field = MOVE_BUTTONS[action]
-                env.step_n(port, field, 3)
+                # Wait until Q*bert is ready to hop
+                for _ in range(35):
+                    data = env.step()
+                    if data.get("qb_anim", 0) >= 16:
+                        break
+                env.step_n(port, field, BUTTON_HOLD)
                 data = env.wait(300)
                 tracker.reset()
                 used_discs.add(disc.side)
