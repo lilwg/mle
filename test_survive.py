@@ -22,8 +22,8 @@ ROMS_PATH = "/Users/pat/mame/roms"
 
 BUTTON_HOLD = 6         # frames to hold direction button
 HOP_FRAMES = 18         # frames per Q*bert hop cycle
-COILY_RELOAD = 24       # ROM $B962: Coily anim reload = 0x18. Full cycle = 24 ticks.
-BALL_RELOAD = 28         # ROM $B6A5: Ball anim reload = 0x1C. Full cycle = 28 ticks.
+COILY_RELOAD = 43       # Measured: 12 wait + 1 trigger + 30 flight = 43 frames/hop
+BALL_RELOAD = 43         # Same cycle for balls (reload values differ but total is same)
 DISC_STALL_THRESHOLD = 5 # hops without progress before routing to disc
 DEAD_END_CORNERS = {(6, 0), (6, 6)}
 
@@ -118,18 +118,19 @@ def _build_sim_enemies(state):
         pos_e, prev_e, etype = e.pos, e.prev_pos, e.etype
         anim = e.anim
 
-        if anim == 0:
-            # Mid-hop animation: entity is in flight (~8 ticks until landing).
-            # Block current AND predicted next position.
-            anim = 8  # approximate mid-flight
+        if anim == 0 or (1 <= anim <= 5):
+            # In-flight: gw is already the DESTINATION but entity hasn't landed.
+            # Measured: flight takes ~30 frames from gw change to landing.
+            # Block both current gw (destination) AND predicted next position.
+            anim = 30  # frames until landing
             next_pos = _predict_next(pos_e, etype, e.direction_bits, qpos, qprev)
             if next_pos and is_valid(next_pos[0], next_pos[1]):
                 enemies.append([next_pos, pos_e, anim, etype, e.direction_bits, e.flags])
         else:
-            # ROM: anim counts down from reload to 16 (wait), then 0 (flight).
-            # Raw anim = ticks until next landing (wait + flight).
-            # Use raw value directly — RELOAD constants match this scale.
-            anim = max(anim, 1)
+            # Wait phase: anim counts 28→16 (12 frames), then triggers hop.
+            # After trigger: 30 frames of flight. Total to next landing:
+            # (anim - 16) + 30 frames = anim + 14
+            anim = max(anim - 16, 0) + 30
 
         # Purple ball at bottom with Coily flags → about to hatch
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
@@ -443,7 +444,7 @@ def execute_disc(env, action, tracker, used_discs, disc):
 
 def run():
     env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False,
-                  throttle=True)
+                  throttle=False)
     tracker = EnemyTracker()
 
     # Start game (randomize wait to vary MAME RNG seed)
