@@ -57,17 +57,24 @@ def wait_until_landed(env):
 
 
 def wait_for_level_start(env, tracker):
-    """Wait for a new level to become playable."""
+    """Wait for a new level to become playable.
+    Poll until Q*bert at top with anim>=16, then test hop to confirm."""
     data = env.step()
-    for _ in range(600):
+    for _ in range(900):
         data = env.step()
         state = read_state(data, tracker)
         pos = state.qbert
         if (is_valid(pos[0], pos[1]) and pos[0] <= 1
                 and state.lives > 0
-                and state.remaining_cubes > 0
                 and data.get("qb_anim", 0) >= 16):
-            return data, state
+            # Try a hop — if it works, level is ready
+            gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
+            env.step_n(":IN4", "P1 Right (Down-Right)", BUTTON_HOLD)
+            for _ in range(25):
+                data = env.step()
+                if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
+                    data = wait_until_landed(env)
+                    return data, read_state(data, tracker)
     return data, read_state(data, tracker)
 
 
