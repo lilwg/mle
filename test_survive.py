@@ -320,7 +320,8 @@ def execute_disc(env, action, tracker, used_discs, disc):
     wait_until_ready(env)
     env.step_n(port, field, BUTTON_HOLD)
     data = env.wait(300)
-    tracker.reset()
+    # Don't reset tracker on disc ride — the new purple ball that spawns
+    # in the same slot needs to be detected as Coily when it hatches.
     used_discs.add(disc.side)
     # Wait until Q*bert arrives at the top
     for _ in range(300):
