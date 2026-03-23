@@ -277,7 +277,10 @@ def read_state(data, tracker=None):
         # Skip phantom entries: coll_y == 0 means no real screen presence.
         # Exception: Ugg/Wrongway are off-grid and may have coll_y == 0
         # while still being deadly to adjacent edge cubes.
-        if coll_y == 0 and not (on_face and (st != 0 or anim > 0)):
+        # Keep face entities (Ugg/Wrongway) and hatching Coily (fl=0x60 at
+        # bottom row) even with coll_y=0 — they're deadly but invisible
+        hatching = flags == 0x60 and pos[0] >= 6
+        if coll_y == 0 and not (on_face and (st != 0 or anim > 0)) and not hatching:
             continue
 
         enemies.append(Enemy(

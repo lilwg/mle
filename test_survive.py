@@ -278,13 +278,19 @@ def is_sequence_safe(state, actions):
     qpos, qprev = state.qbert, state.qbert_prev
     enemies = _build_sim_enemies(state)
 
-    # Check first-hop destination isn't occupied
+    # Check first-hop destination isn't occupied or adjacent to Coily
     if actions:
         dr, dc = MOVE_DELTAS[actions[0]]
         dest = (qpos[0] + dr, qpos[1] + dc)
         for en in enemies:
-            if en[0] == dest and is_valid(dest[0], dest[1]):
+            if not is_valid(en[0][0], en[0][1]):
+                continue
+            if en[0] == dest:
                 return False
+            # Coily within 1 hop of destination + low anim = danger
+            if en[3] == "coily" and en[2] <= 5:
+                if grid_dist(dest[0], dest[1], en[0][0], en[0][1]) <= 1:
+                    return False
 
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
@@ -301,13 +307,18 @@ def is_sequence_safe(state, actions):
                 if en[2] <= 0:
                     _step_enemy(en, qpos, qprev)
 
+        # Check destination is clear before landing
+        for en in enemies:
+            if en[0] == (nr, nc) and is_valid(en[0][0], en[0][1]):
+                return False
+
         # Q*bert lands at destination
         qprev = qpos
         qpos = (nr, nc)
 
-        # Phase 2: grounded at destination (10 frames). Check collision
+        # Phase 2: grounded at destination (14 frames). Check collision
         # as enemies arrive. Q*bert can't move yet (waiting for qb_anim).
-        for _ in range(10):
+        for _ in range(14):
             for en in enemies:
                 if not is_valid(en[0][0], en[0][1]):
                     continue
@@ -316,6 +327,15 @@ def is_sequence_safe(state, actions):
                     _step_enemy(en, qpos, qprev)
                 if qpos == en[0]:
                     return False
+
+        # Safety margin: if any enemy is distance 1 from Q*bert after
+        # the grounded phase, consider it unsafe (timing errors can cause
+        # collisions within 1 hop of prediction error)
+        for en in enemies:
+            if not is_valid(en[0][0], en[0][1]):
+                continue
+            if en[3] in ("coily", "ball") and grid_dist(qpos[0], qpos[1], en[0][0], en[0][1]) == 0:
+                return False
 
     return True
 
@@ -580,7 +600,7 @@ def run():
                                 f" prev={e.prev_pos} cy={e.coll_y}"
                                 f"{' HARMLESS' if e.harmless else ''}")
                 # Raw slot dump — catch enemies invisible to state parser
-                if current_level >= 3:
+                if True:
                     for n in range(10):
                         fl = data.get(f"e{n}_flags", 0)
                         st_raw = data.get(f"e{n}_st", 0)
@@ -713,7 +733,7 @@ def run():
                 cd = grid_dist(pos[0], pos[1], coily[0], coily[1]) if coily else 99
                 tgt = pick_target(state)
                 enemies_str = " ".join(
-                    f"{e.etype[0]}{e.pos}{'!' if e.pos==state.qbert else ''}"
+                    f"{e.etype[0]}{e.pos}a{e.anim}{'!' if e.pos==state.qbert else ''}"
                     for e in state.enemies
                     if not e.harmless
                 )
