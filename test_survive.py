@@ -442,11 +442,16 @@ def run():
                     break
 
             if disc_match:
+                d0r = data.get("disc0_row", 0)
+                d1r = data.get("disc1_row", 0)
+                d0a = data.get("disc0_avail", 0)
+                d1a = data.get("disc1_avail", 0)
                 data, state = execute_disc(env, action, tracker, used_discs, disc_match)
                 hops += 1
                 hops_since_progress = 0
                 cubes = NUM_CUBES - state.remaining_cubes
-                print(f"  #{hops:3d} DISC! → {state.qbert}  cubes={cubes}/{NUM_CUBES}")
+                print(f"  #{hops:3d} DISC! {pos}→{state.qbert} "
+                      f"d0={d0a}@r{d0r} d1={d1a}@r{d1r}")
                 continue
 
             # ── Normal hop ──
