@@ -386,6 +386,11 @@ def decide(state, hops_since_progress):
     coily = find_coily(state)
     coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
 
+    # ── Spawn safety: enemies spawn at (1,0) and (1,1). If at (0,0)
+    # and spawn is imminent, wait instead of hopping into the spawn zone ──
+    if row <= 1 and state.spawn_countdown < 10:
+        return None  # wait for spawn to pass
+
     # ── Disc: take when at launch point with Coily close ──
     if coily and state.discs and coily_d <= 2:
         for disc in state.discs:
@@ -477,7 +482,16 @@ def execute_disc(env, action, tracker, used_discs, disc):
         if is_valid(state.qbert[0], state.qbert[1]) and state.qbert[0] <= 1:
             break
     data = wait_until_landed(env)
-    return data, read_state(data, tracker)
+    state = read_state(data, tracker)
+    # Safety: wait at (0,0) if a spawn is imminent (spawn_countdown low).
+    # Enemies spawn at (0,0) / (-1,0) area — if we hop immediately we may
+    # collide with a spawning ball.
+    for _ in range(60):
+        if state.spawn_countdown > 10:
+            break
+        data = env.step()
+        state = read_state(data, tracker)
+    return data, state
 
 
 def run():
