@@ -418,8 +418,24 @@ def decide(state, hops_since_progress):
 
 # ── Game loop ───────────────────────────────────────────────────────
 
-def execute_hop(env, action):
-    """Press direction button and wait for Q*bert to land."""
+def execute_hop(env, action, tracker):
+    """Press direction button and wait for Q*bert to land.
+    Does a real-time safety check just before pressing — if any enemy
+    is at the destination, aborts and returns None."""
+    dr, dc = MOVE_DELTAS[action]
+    # Read current state for real-time check
+    data = env.step()
+    state = read_state(data, tracker)
+    dest = (state.qbert[0] + dr, state.qbert[1] + dc)
+    # Check: is any non-harmless enemy at destination right now?
+    for e in state.enemies:
+        if e.harmless or not is_valid(e.pos[0], e.pos[1]):
+            continue
+        if e.pos == dest:
+            return None  # enemy AT destination — abort
+        # Also check cross-match: enemy heading to our current pos
+        if e.pos == state.qbert and e.prev_pos == dest:
+            return None
     port, field = MOVE_BUTTONS[action]
     env.step_n(port, field, BUTTON_HOLD)
     return wait_until_landed(env)
@@ -532,7 +548,7 @@ def run():
                                 f" prev={e.prev_pos} cy={e.coll_y}"
                                 f"{' HARMLESS' if e.harmless else ''}")
                 # Raw slot dump — catch enemies invisible to state parser
-                if current_level >= 3:
+                if True:
                     for n in range(10):
                         fl = data.get(f"e{n}_flags", 0)
                         st_raw = data.get(f"e{n}_st", 0)
@@ -627,7 +643,11 @@ def run():
                 continue
 
             pos_before = pos
-            data = execute_hop(env, action)
+            data = execute_hop(env, action, tracker)
+            if data is None:
+                # Real-time check aborted — enemy at destination
+                data = env.step()
+                continue
             state = read_state(data, tracker)
 
             if state.qbert == pos_before:
