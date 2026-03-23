@@ -213,7 +213,7 @@ def is_sequence_safe(state, actions):
         if not is_valid(nr, nc):
             return False
 
-        # Tick frames — advance all enemies
+        # Phase 1: hop animation (HOP_FRAMES). Enemies tick, Q*bert in air.
         for _ in range(HOP_FRAMES):
             for en in enemies:
                 if not is_valid(en[0][0], en[0][1]):
@@ -222,14 +222,21 @@ def is_sequence_safe(state, actions):
                 if en[2] <= 0:
                     _step_enemy(en, qpos, qprev)
 
-        # Q*bert lands
+        # Q*bert lands at destination
         qprev = qpos
         qpos = (nr, nc)
 
-        # Collision check at landing
-        for en in enemies:
-            if qpos == en[0] and is_valid(en[0][0], en[0][1]):
-                return False
+        # Phase 2: grounded at destination (10 frames). Check collision
+        # as enemies arrive. Q*bert can't move yet (waiting for qb_anim).
+        for _ in range(10):
+            for en in enemies:
+                if not is_valid(en[0][0], en[0][1]):
+                    continue
+                en[2] -= 1
+                if en[2] <= 0:
+                    _step_enemy(en, qpos, qprev)
+                if qpos == en[0]:
+                    return False
 
     return True
 
@@ -431,7 +438,14 @@ def run():
 
             # ── Death handling ──
             if state.lives < prev_lives:
-                print(f"  DIED at hop {hops}! lives={state.lives} cubes={cubes}")
+                killers = ""
+                for e in state.enemies:
+                    if e.harmless:
+                        continue
+                    killers += (f"\n    s{e.slot}:{e.etype}@{e.pos}"
+                                f" fl={e.flags:#x} a={e.anim}"
+                                f" prev={e.prev_pos} st={e.state}")
+                print(f"  DIED at hop {hops} @{state.qbert} cubes={cubes}{killers}")
                 if state.lives == 0:
                     break
                 prev_lives = state.lives
@@ -493,6 +507,17 @@ def run():
             if state.qbert == pos_before:
                 continue  # hop didn't register
             hops += 1
+
+            # Check for imminent death — capture enemies before death clears them
+            if state.lives < prev_lives:
+                killers = ""
+                for e in state.enemies:
+                    if e.harmless:
+                        continue
+                    killers += (f"\n    s{e.slot}:{e.etype}@{e.pos}"
+                                f" fl={e.flags:#x} a={e.anim} prev={e.prev_pos}")
+                print(f"  KILLED at hop {hops} @{state.qbert} ({pos_before}→{state.qbert})"
+                      f"{killers}")
 
             # ── Track progress ──
             new_cubes = NUM_CUBES - state.remaining_cubes
