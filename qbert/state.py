@@ -178,7 +178,7 @@ def _parse_discs(data):
 
     # Verified empirically: both discs work from (d_row+1, edge).
     # d0 = left disc, d1 = right disc (original assignment was correct).
-    if d0_avail == 1 and d0_row > 0:
+    if d0_avail and d0_row > 0:
         jump_row = d0_row + 1
         discs.append(Disc(
             row=d0_row, side="left",
@@ -186,7 +186,7 @@ def _parse_discs(data):
             direction=LEFT,
         ))
 
-    if d1_avail == 1 and d1_row > 0:
+    if d1_avail and d1_row > 0:
         jump_row = d1_row + 1
         discs.append(Disc(
             row=d1_row, side="right",

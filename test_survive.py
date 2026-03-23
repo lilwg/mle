@@ -379,10 +379,8 @@ def execute_disc(env, action, tracker, used_discs, disc):
     port, field = MOVE_BUTTONS[action]
     wait_until_ready(env)
     env.step_n(port, field, BUTTON_HOLD)
-    data = env.wait(300)
-    # Don't reset tracker on disc ride — the new purple ball that spawns
-    # in the same slot needs to be detected as Coily when it hatches.
     used_discs.add(disc.side)
+    data = env.wait(300)
     # Wait until Q*bert arrives at the top
     for _ in range(300):
         data = env.step()
@@ -434,7 +432,7 @@ def run():
             if level_active and state.remaining_cubes == 0:
                 print(f"\n  === LEVEL COMPLETE at hop {hops}! ===\n")
                 level_active = False
-                used_discs = set()
+                used_discs = set()  # discs reset each level
                 hops_since_progress = 0
                 last_cubes = 0
                 tracker.reset()
@@ -442,7 +440,12 @@ def run():
                 data, state = wait_for_level_start(env, tracker)
                 prev_lives = state.lives
                 hops = 1
-                print(f"  New level: lives={state.lives} Q*bert={state.qbert}")
+                d0a = data.get("disc0_avail", 0)
+                d0r = data.get("disc0_row", 0)
+                d1a = data.get("disc1_avail", 0)
+                d1r = data.get("disc1_row", 0)
+                print(f"  New level: lives={state.lives} Q*bert={state.qbert} "
+                      f"discs: d0={d0a}@r{d0r} d1={d1a}@r{d1r}")
                 continue
 
             # ── Death handling ──
@@ -471,7 +474,7 @@ def run():
                 data = env.step()
                 continue
 
-            # ── Filter consumed discs ──
+            # Filter discs we've already used this level
             state.discs = [d for d in state.discs if d.side not in used_discs]
 
             # ── Decide ──
