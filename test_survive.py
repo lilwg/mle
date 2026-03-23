@@ -1,116 +1,69 @@
-"""Pure survival test: Q*bert dodges everything indefinitely.
-No cube collection, no disc usage. Just prove the simulator works."""
+"""Q*bert agent: 3-hop safe lookahead + nearest-cube routing + disc usage."""
 
 import sys, os, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mle import MameEnv
-from qbert.state import QBERT_RAM, read_state, is_valid, EnemyTracker, NUM_CUBES
-from qbert.sim import make_sim_state, clone, simulate, MOVE_DELTAS, UP, DOWN, LEFT, RIGHT
+from qbert.state import (QBERT_RAM, read_state, is_valid, EnemyTracker,
+                          NUM_CUBES, MAX_ROW, pos_to_cube_index)
+from qbert.sim import MOVE_DELTAS, UP, DOWN, LEFT, RIGHT
+from qbert.predict import predict_coily
 from qbert.planner import neighbors, MOVE_BUTTONS, COIN_BUTTON, START_BUTTON
-from qbert.strategy import grid_dist
 
 ROMS_PATH = "/Users/pat/mame/roms"
 BUTTON_HOLD = 6
+HOP_FRAMES = 18
+COILY_RELOAD = 31
+BALL_RELOAD = 27
 
 
-def score_survival(result):
-    """Pure survival scoring: stay alive, maximize escape routes + coily distance."""
-    if not result.alive:
-        return result.steps_survived * 100
-    base = 1_000_000
-    # Use predicted Coily position AND current positions of ALL coilys
-    cp = result.coily_final_pos
-    if cp and cp != (-1, -1):
-        from qbert.strategy import grid_dist
-        coily_d = grid_dist(result.final_pos[0], result.final_pos[1], cp[0], cp[1])
-    else:
-        coily_d = 99
-    # Extremely heavy Coily avoidance — distance is everything
-    return base + coily_d * 10000 + result.escape_routes * 100
+def grid_dist(r1, c1, r2, c2):
+    dr = r2 - r1
+    dc = c2 - c1
+    if dr >= 0 and dc >= 0: return max(dr, dc)
+    if dr <= 0 and dc <= 0: return max(-dr, -dc)
+    return abs(dr) + abs(dc)
 
 
-def generate_seqs(r, c, depth, max_depth, path):
-    if depth >= max_depth:
-        yield list(path)
-        return
-    for action, nr, nc in neighbors(r, c):
-        path.append(action)
-        yield from generate_seqs(nr, nc, depth + 1, max_depth, path)
-        path.pop()
-
-
-def _sim_check_collision(qpos, epos):
-    """Collision check: current position match."""
-    return qpos == epos
-
+# ── Simulation: is a sequence of Q*bert hops safe? ──────────────────
 
 def _is_sequence_safe(state, actions):
-    """Exact frame-by-frame simulation: returns True if Q*bert survives
-    all hops in the action sequence.
-
-    Uses actual anim counters from RAM for exact first-hop timing.
-    Ball paths from direction_bits. Coily chase from predict_coily.
-    """
-    from qbert.predict import predict_coily
-
-    HOP_FRAMES = 18  # Q*bert can hop every ~16-18 frames
-    # Hop triggers at anim=16. Reload is 32. Effective cycle = 32-16 = 16.
-    # Plus ~17 frames of hop animation before next reload.
-    # Total measured cycle: 47 frames. Effective wait: 47-17 = 30 frames.
-    BALL_RELOAD = 27   # 43 total - 16 trigger offset
-    COILY_RELOAD = 31  # 47 total - 16 trigger offset
-
+    """Frame-by-frame sim. Returns True if Q*bert survives all hops."""
     qpos = state.qbert
     qprev = state.qbert_prev
 
-    # Ugg/Wrongway: crawl on cube SIDES (off-grid positions).
-    # ROM: they move up/down using direction_bits (like balls but vertical).
-    # Their grid words have col < 0 (left face) or col > row (right face).
-    # Dangerous to Q*bert on adjacent edge cubes.
-    ugg_danger = set()
+    # Build enemy list: [pos, prev, anim, etype, dir_bits, flags]
+    enemies = []
+
+    # Ugg/Wrongway: off-grid positions → block adjacent edge cubes
     for e in state.enemies:
-        r, c = e.pos
         if e.harmless:
             continue
+        r, c = e.pos
         if c < 0:
-            # Left face: dangerous to edge cubes (row-1..row+1, 0)
             for dr in (-1, 0, 1):
                 if is_valid(r + dr, 0):
-                    ugg_danger.add((r + dr, 0))
+                    enemies.append([(r + dr, 0), (r + dr, 0), 999, "ugg", 0, 0])
         elif r >= 0 and c > r:
-            # Right face: dangerous to edge cubes (row-1..row+1, rightmost)
             for dr in (-1, 0, 1):
-                rr = r + dr
-                if is_valid(rr, rr):
-                    ugg_danger.add((rr, rr))
-
-    # Build enemy list: [pos, prev, anim_counter, etype, direction_bits, flags]
-    enemies = []
-    # Add Ugg dangers as stationary blockers
-    for dp in ugg_danger:
-        enemies.append([dp, dp, 999, "ugg", 0, 0])
+                if is_valid(r + dr, r + dr):
+                    enemies.append([(r + dr, r + dr), (r + dr, r + dr), 999, "ugg", 0, 0])
 
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue
-        etype = e.etype
+
         pos_e = e.pos
         prev_e = e.prev_pos
+        etype = e.etype
         anim = e.anim
 
-        # Ugg/Wrongway detection is handled separately below (off-grid positions)
-
-        # anim=0 means enemy is in HOP ANIMATION (lasts ~17 frames).
-        # The entity is between its current and next position. Block BOTH:
-        # current position (might still be there) and destination (arriving).
         if anim == 0:
+            # Mid-hop animation: entity transitioning to next position.
+            # Block both current AND predicted next position.
             anim = COILY_RELOAD if etype == "coily" else BALL_RELOAD
-            # Predict destination and add as a SECOND blocker
             if etype == "coily":
-                qr, qc = state.qbert
-                qprev = state.qbert_prev
-                target = qprev if pos_e != qprev else (qr, qc)
+                target = qprev if pos_e != qprev else qpos
                 nr, nc = predict_coily(pos_e[0], pos_e[1], target[0], target[1])
                 if is_valid(nr, nc):
                     enemies.append([(nr, nc), pos_e, anim, "coily", e.direction_bits, e.flags])
@@ -123,56 +76,49 @@ def _is_sequence_safe(state, actions):
                     enemies.append([(nr, nc), pos_e, anim, "ball", e.direction_bits >> 1, e.flags])
         else:
             # All enemies hop when anim reaches 16, not 0.
-            # Effective frames until hop = anim - 16.
             anim = max(anim - 16, 1)
 
-        # Purple ball at row 6 = about to hatch into Coily immediately
+        # Purple ball at row 6 with Coily flags → about to hatch
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
             etype = "coily"
             anim = 1
 
-        enemies.append([
-            pos_e, prev_e, anim, etype,
-            e.direction_bits, e.flags,
-        ])
+        enemies.append([pos_e, prev_e, anim, etype, e.direction_bits, e.flags])
 
-    # Check if Q*bert's FIRST HOP destination lands on an enemy.
-    # (Skip checking current position — Q*bert is alive there now,
-    # collision Y saved it.)
-    if len(actions) > 0:
+    # Check first-hop destination against all enemies
+    if actions:
         dr, dc = MOVE_DELTAS[actions[0]]
         first_dest = (qpos[0] + dr, qpos[1] + dc)
         for en in enemies:
             if en[0] == first_dest and is_valid(en[0][0], en[0][1]):
                 return False
 
+    # Simulate each hop
     for action in actions:
         dr, dc = MOVE_DELTAS[action]
         nr, nc = qpos[0] + dr, qpos[1] + dc
         if not is_valid(nr, nc):
-            return False  # invalid move = can't use this sequence
+            return False
 
-        # Tick HOP_FRAMES frames — advance enemy positions
+        # Tick frames
         for _ in range(HOP_FRAMES):
             for en in enemies:
-                epos, eprev, anim, etype, dbits, eflags = en
+                epos = en[0]
                 if not is_valid(epos[0], epos[1]):
                     continue
-                anim -= 1
-                en[2] = anim
-                if anim <= 0:
-                    # Enemy hops
+                en[2] -= 1
+                if en[2] <= 0:
                     old = epos
+                    etype = en[3]
                     if etype == "ugg":
-                        # Lateral mover — we don't predict, keep blocking
-                        en[2] = 999  # stay put
+                        en[2] = 999
                         continue
                     elif etype == "coily":
                         target = qprev if epos != qprev else qpos
-                        epos = predict_coily(epos[0], epos[1],
-                                             target[0], target[1])
+                        epos = predict_coily(epos[0], epos[1], target[0], target[1])
                         en[2] = COILY_RELOAD
                     else:
+                        dbits = en[4]
                         if dbits & 1:
                             epos = (epos[0] + 1, epos[1] + 1)
                         else:
@@ -182,47 +128,54 @@ def _is_sequence_safe(state, actions):
                     if is_valid(epos[0], epos[1]):
                         en[0] = epos
                         en[1] = old
-                    elif eflags in (0x60, 0x68) and etype != "coily":
+                    elif en[5] in (0x60, 0x68) and etype != "coily":
                         en[3] = "coily"
                         en[2] = COILY_RELOAD
                     else:
                         en[0] = (-1, -1)
-                        continue
 
-        # Q*bert lands — check collision ONLY at landing (matching ROM
-        # behavior: collision Y check means mid-hop entities don't collide)
+        # Q*bert lands
         qprev = qpos
         qpos = (nr, nc)
-
         for en in enemies:
-            if not is_valid(en[0][0], en[0][1]):
-                continue
-            if _sim_check_collision(qpos, en[0]):
+            if qpos == en[0] and is_valid(en[0][0], en[0][1]):
                 return False
-
-    # DEBUG: print if any enemy is at same position as final qpos
-    for en in enemies:
-        if en[0] == qpos and is_valid(en[0][0], en[0][1]):
-            print(f"    SIM-END: q@{qpos} en@{en[0]} anim={en[2]} type={en[3]} → SAFE?!")
 
     return True
 
 
-def _find_coily(state):
+# ── Decision function ───────────────────────────────────────────────
+
+def find_coily(state):
+    """Find confirmed Coily (etype='coily' from tracker or fl=0x68)."""
     for e in state.enemies:
         if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
-            return e.pos
-    # Also check for entities with Coily-family flags at bottom rows
-    # (fl=0x60 that just hatched, tracker hasn't confirmed yet)
-    for e in state.enemies:
-        if e.flags in (0x60, 0x68, 0x6a, 0x62) and e.pos[0] >= 5 and is_valid(e.pos[0], e.pos[1]):
             return e.pos
     return None
 
 
-def decide_survive(state):
-    """3-hop lookahead: find all 3-move sequences that survive exact
-    frame-by-frame simulation, then pick the one closest to target."""
+def pick_target(state):
+    """Pick next cube to color. Prioritize (6,6), then nearest uncolored."""
+    qr, qc = state.qbert
+    # (6,6) first — safe diagonal from start
+    idx = pos_to_cube_index(6, 6)
+    if idx is not None and state.cube_states[idx] != state.target_color:
+        return (6, 6)
+    # Nearest uncolored
+    best_d, best = 999, None
+    for row in range(MAX_ROW + 1):
+        for col in range(row + 1):
+            idx = pos_to_cube_index(row, col)
+            if idx is not None and state.cube_states[idx] != state.target_color:
+                d = grid_dist(qr, qc, row, col)
+                if d < best_d:
+                    best_d = d
+                    best = (row, col)
+    return best
+
+
+def decide(state, hops_since_progress):
+    """Pick the best action. Returns action int or None (wait)."""
     row, col = state.qbert
     if not is_valid(row, col):
         return DOWN
@@ -231,41 +184,34 @@ def decide_survive(state):
     if not valid:
         return DOWN
 
-    coily = _find_coily(state)
+    coily = find_coily(state)
 
-    # If Sam/Slick is on the board, prefer routing toward it
-    # (catching prevents cube regression, gives 300 pts bonus)
-    target = _target
-    for e in state.enemies:
-        if e.harmless and is_valid(e.pos[0], e.pos[1]):
-            sam_d = grid_dist(row, col, e.pos[0], e.pos[1])
-            if sam_d <= 4:  # only chase if nearby
-                target = e.pos
-                break
-
-    # Avoid dead-end corners when Coily is active
-    avoid = set()
-    if coily:
-        avoid = {(6, 0), (6, 6)}
-
-    # Use disc when stuck (no progress in 15+ hops) and Coily not adjacent
-    if coily and state.discs and _hops_since_cube >= 15:
-        coily_d = grid_dist(row, col, coily[0], coily[1])
+    # At a disc launch point? Take it if stuck (no progress).
+    if coily and state.discs and hops_since_progress >= 10:
         for disc in state.discs:
-            if (row, col) == disc.jump_from and coily_d >= 2:
+            if (row, col) == disc.jump_from:
                 return disc.direction
-        # Route toward nearest disc
+
+    # Pick routing target
+    if coily and state.discs and hops_since_progress >= 10:
+        # Route toward disc
+        target = None
         best_dd = 999
-        disc_target = None
         for disc in state.discs:
             dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
             if dd < best_dd:
                 best_dd = dd
-                disc_target = disc.jump_from
-        target = disc_target
+                target = disc.jump_from
+    else:
+        target = pick_target(state)
 
-    # Try all 3-hop sequences toward target
-    safe_first_moves = {}
+    # Don't enter dead-end corners when Coily is active
+    avoid = set()
+    if coily:
+        avoid = {(6, 0), (6, 6)}
+
+    # 3-hop safe sequences toward target
+    safe_moves = {}
     for a1, r1, c1 in valid:
         if (r1, c1) in avoid:
             continue
@@ -273,128 +219,36 @@ def decide_survive(state):
             for a3, r3, c3 in neighbors(r2, c2):
                 if _is_sequence_safe(state, [a1, a2, a3]):
                     d = grid_dist(r1, c1, target[0], target[1]) if target else 0
-                    if a1 not in safe_first_moves or d < safe_first_moves[a1]:
-                        safe_first_moves[a1] = d
+                    if a1 not in safe_moves or d < safe_moves[a1]:
+                        safe_moves[a1] = d
 
-    if safe_first_moves:
-        return min(safe_first_moves, key=safe_first_moves.get)
+    if safe_moves:
+        return min(safe_moves, key=safe_moves.get)
 
-    # No safe moves — try to reach disc
-    if coily and state.discs:
-        best_dd = 999
-        disc_target = None
-        for disc in state.discs:
-            if (row, col) == disc.jump_from:
-                return disc.direction
-            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
-            if dd < best_dd:
-                best_dd = dd
-                disc_target = disc.jump_from
-
-        disc_3hop = {}
-        for a1, r1, c1 in valid:
-            if (r1, c1) in avoid:
-                continue
-            for a2, r2, c2 in neighbors(r1, c1):
-                for a3, r3, c3 in neighbors(r2, c2):
-                    if _is_sequence_safe(state, [a1, a2, a3]):
-                        d = grid_dist(r1, c1, disc_target[0], disc_target[1])
-                        if a1 not in disc_3hop or d < disc_3hop[a1]:
-                            disc_3hop[a1] = d
-        if disc_3hop:
-            return min(disc_3hop, key=disc_3hop.get)
-
-    # No safe cube-collecting moves. Route toward disc or just survive.
-    if coily and state.discs:
-        # If already at a disc, take it
-        for disc in state.discs:
-            if (row, col) == disc.jump_from:
-                return disc.direction
-
-        # Route toward nearest disc with ANY safe move (even 1-hop)
-        best_dd = 999
-        disc_target = None
-        for disc in state.discs:
-            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
-            if dd < best_dd:
-                best_dd = dd
-                disc_target = disc.jump_from
-
-        disc_moves = {}
-        for a, r, c in valid:
-            if (r, c) in avoid:
-                continue
-            if _is_sequence_safe(state, [a]):
-                d = grid_dist(r, c, disc_target[0], disc_target[1])
-                disc_moves[a] = d
-        if disc_moves:
-            return min(disc_moves, key=disc_moves.get)
-
-    # Just pick any safe move to keep running
+    # Fallback: any 1-hop safe move
     for a, r, c in valid:
         if (r, c) not in avoid and _is_sequence_safe(state, [a]):
             return a
-
-    # Even unsafe — pick any move with escape routes rather than waiting
     for a, r, c in valid:
         if _is_sequence_safe(state, [a]):
             return a
 
-    # Truly stuck — wait
     return None
 
 
-# Current target cube
-_target = None
-_level_active = False
-_hops_since_cube = 0
-_last_cubes = 0
-
-
-def _pick_target(state):
-    """Pick nearest uncolored cube as target."""
-    global _target
-    from qbert.state import pos_to_cube_index, MAX_ROW
-    qr, qc = state.qbert
-
-    # If current target is already colored, clear it
-    if _target:
-        idx = pos_to_cube_index(_target[0], _target[1])
-        if idx is not None and state.cube_states[idx] == state.target_color:
-            _target = None
-
-    if _target is None:
-        # Prioritize (6,6) corner — straight diagonal from (0,0), do it first.
-        # (6,0) comes naturally during collection or after disc ride.
-        for corner in [(6, 6)]:
-            idx = pos_to_cube_index(corner[0], corner[1])
-            if idx is not None and state.cube_states[idx] != state.target_color:
-                _target = corner
-                return
-
-        # Otherwise find nearest uncolored cube
-        best_d = 999
-        for row in range(MAX_ROW + 1):
-            for col in range(row + 1):
-                idx = pos_to_cube_index(row, col)
-                if idx is not None and state.cube_states[idx] != state.target_color:
-                    d = grid_dist(qr, qc, row, col)
-                    if d < best_d:
-                        best_d = d
-                        _target = (row, col)
-
+# ── Game loop ───────────────────────────────────────────────────────
 
 def run():
-    env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False, throttle=True)
+    env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False,
+                  throttle=True)
     tracker = EnemyTracker()
-    print("Pure survival test — dodge everything forever")
 
     env.wait(700)
     env.step_n(*COIN_BUTTON, 15)
     env.wait(180)
     env.step_n(*START_BUTTON, 5)
 
-    # Wait for game start
+    # Wait for game to start
     data = env.step()
     state = read_state(data, tracker)
     for _ in range(900):
@@ -407,235 +261,149 @@ def run():
     prev_lives = state.lives
     hops = 0
     used_discs = set()
-    global _level_active, _hops_since_cube, _last_cubes
-    _level_active = False
-    _hops_since_cube = 0
-    _last_cubes = 0
+    level_active = False
+    hops_since_progress = 0
+    last_cubes = 0
 
-    for _ in range(5000):
-        state = read_state(data, tracker)
-
-        cubes = NUM_CUBES - state.remaining_cubes
-
-        # Track if remaining has been initialized (goes above 0)
-        if state.remaining_cubes > 0:
-            _level_active = True
-
-        # Level complete: remaining drops to 0 after being active
-        if _level_active and state.remaining_cubes == 0:
-            print(f"\n  === LEVEL COMPLETE at hop {hops}! ===\n")
-            global _target
-            _target = None
-            _level_active = False
-            used_discs = set()
-            tracker.reset()
-            # Wait for transition, then probe until Q*bert can move
-            env.wait(300)
-            for _ in range(3000):
-                data = env.step()
-                state = read_state(data, tracker)
-                pos = state.qbert
-                if (is_valid(pos[0], pos[1]) and pos[0] <= 1
-                        and state.lives > 0
-                        and data.get("qb_anim", 0) >= 16):
-                    # Try a button press and see if grid word changes
-                    gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
-                    env.step_n(":IN4", "P1 Right (Down-Right)", 6)
-                    for _ in range(20):
-                        data = env.step()
-                        if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
-                            break
-                    if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
-                        # Q*bert moved — new level is active!
-                        for _ in range(12):
-                            data = env.step()
-                        state = read_state(data, tracker)
-                        break
-            prev_lives = state.lives
-            hops = 1  # already made one move
-            print(f"  New level: lives={state.lives} remaining={state.remaining_cubes} Q*bert={state.qbert}")
-            continue
-
-        # Death check
-        if state.lives < prev_lives:
-            enemy_detail = ""
-            for e in state.enemies:
-                if is_valid(e.pos[0], e.pos[1]):
-                    enemy_detail += (f"\n    s{e.slot}:{e.etype} @{e.pos} "
-                                     f"prev={e.prev_pos} st={e.state} "
-                                     f"fl={e.flags:#x} anim={e.anim}")
-            print(f"  DIED at hop {hops}! lives={state.lives} cubes={cubes} "
-                  f"pos={state.qbert}{enemy_detail}")
-            if state.lives == 0:
-                break
-            prev_lives = state.lives
-            tracker.reset()
-            _target = None
-            data = env.wait(300)
+    try:
+        for _ in range(50000):
             state = read_state(data, tracker)
-            hops = 0
-            continue
-        prev_lives = state.lives
+            cubes = NUM_CUBES - state.remaining_cubes
 
-        pos = state.qbert
-        if not is_valid(pos[0], pos[1]):
-            data = env.step()
-            continue
+            # Level active tracking
+            if state.remaining_cubes > 0:
+                level_active = True
 
-        # Filter used discs
-        state.discs = [d for d in state.discs if d.side not in used_discs]
+            # Level complete
+            if level_active and state.remaining_cubes == 0:
+                print(f"\n  === LEVEL COMPLETE at hop {hops}! ===\n")
+                level_active = False
+                used_discs = set()
+                hops_since_progress = 0
+                last_cubes = 0
+                tracker.reset()
+                env.wait(300)
+                for _ in range(3000):
+                    data = env.step()
+                    state = read_state(data, tracker)
+                    pos = state.qbert
+                    if (is_valid(pos[0], pos[1]) and pos[0] <= 1
+                            and state.lives > 0
+                            and data.get("qb_anim", 0) >= 16):
+                        gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
+                        env.step_n(":IN4", "P1 Right (Down-Right)", 6)
+                        for _ in range(20):
+                            data = env.step()
+                            if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
+                                break
+                        if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
+                            for _ in range(12):
+                                data = env.step()
+                            state = read_state(data, tracker)
+                            break
+                prev_lives = state.lives
+                hops = 1
+                print(f"  New level: lives={state.lives} Q*bert={state.qbert}")
+                continue
 
-        # Pick target cube and decide move
-        _pick_target(state)
-        action = decide_survive(state)
+            # Death
+            if state.lives < prev_lives:
+                print(f"  DIED at hop {hops}! lives={state.lives} cubes={cubes}")
+                if state.lives == 0:
+                    break
+                prev_lives = state.lives
+                tracker.reset()
+                hops_since_progress = 0
+                data = env.wait(300)
+                state = read_state(data, tracker)
+                hops = 0
+                continue
+            prev_lives = state.lives
 
-        if action is None:
-            # Debug: log state when stuck
-            enemies_near = [(e.slot, e.etype, e.pos, e.flags, e.anim,
-                            grid_dist(pos[0], pos[1], e.pos[0], e.pos[1]))
-                           for e in state.enemies
-                           if not e.harmless and is_valid(e.pos[0], e.pos[1])]
-            at_disc = any(pos == d.jump_from for d in state.discs)
-            if enemies_near:
-                print(f"  STUCK hop {hops}: Q@{pos} at_disc={at_disc}")
-                for s, et, ep, ef, ea, d in enemies_near:
-                    print(f"    s{s}:{et} @{ep} fl={ef:#x} anim={ea} d={d}")
-            for _ in range(6):
-                data = env.step()
-            continue
-
-        # Debug: at hops near typical death, show what sim thinks
-        if 45 <= hops <= 60 or (hops > 0 and hops % 50 == 0):
-            from qbert.sim import MOVE_DELTAS as MD
-            dr, dc = MD[action]
-            dest = (pos[0]+dr, pos[1]+dc)
-            safe3 = _is_sequence_safe(state, [action, action, action])
-            enemy_info = [(e.slot, e.etype, e.pos, e.flags, e.anim)
-                          for e in state.enemies if is_valid(e.pos[0], e.pos[1])]
-            print(f"  DBG hop {hops}: {pos}→{dest} action={action} safe3={safe3}")
-            for s, et, ep, ef, ea in enemy_info:
-                cy = data.get(f"e{s}_coll_y", 0)
-                print(f"      s{s}:{et} @{ep} fl={ef:#x} anim={ea} cy={cy}")
-
-        # Check if this is a disc ride
-        is_disc = False
-        for disc in state.discs:
-            if pos == disc.jump_from and action == disc.direction:
-                is_disc = True
-                break
-
-        if is_disc:
-            # Verify Q*bert is actually at the disc position
-            actual_pos = read_state(data, tracker).qbert
-            if actual_pos != disc.jump_from:
+            pos = state.qbert
+            if not is_valid(pos[0], pos[1]):
                 data = env.step()
                 continue
-            print(f"  DISC: pos={pos} side={disc.side}")
-            port, field = MOVE_BUTTONS[action]
-            env.step_n(port, field, 6)
-            # Wait for disc ride to complete — Q*bert should end at (0,0)
-            data = env.wait(300)
-            tracker.reset()
-            used_discs.add(disc.side)
-            # Wait until Q*bert is at a valid position (disc ride done)
-            for _ in range(300):
-                data = env.step()
+
+            # Filter used discs
+            state.discs = [d for d in state.discs if d.side not in used_discs]
+
+            # Decide
+            action = decide(state, hops_since_progress)
+
+            if action is None:
+                for _ in range(6):
+                    data = env.step()
+                continue
+
+            # Disc ride?
+            is_disc = False
+            for disc in state.discs:
+                if pos == disc.jump_from and action == disc.direction:
+                    is_disc = True
+                    break
+
+            if is_disc:
+                port, field = MOVE_BUTTONS[action]
+                env.step_n(port, field, 3)
+                data = env.wait(300)
+                tracker.reset()
+                used_discs.add(disc.side)
+                for _ in range(300):
+                    data = env.step()
+                    state = read_state(data, tracker)
+                    if is_valid(state.qbert[0], state.qbert[1]) and state.qbert[0] <= 1:
+                        break
+                for _ in range(30):
+                    data = env.step()
                 state = read_state(data, tracker)
-                if is_valid(state.qbert[0], state.qbert[1]) and state.qbert[0] <= 1:
-                    break
-            for _ in range(30):
+                hops += 1
+                hops_since_progress = 0
+                print(f"  #{hops:3d} DISC! → {state.qbert}  cubes={cubes}/{NUM_CUBES}")
+                continue
+
+            # Normal hop
+            dr, dc = MOVE_DELTAS[action]
+            nr, nc = pos[0] + dr, pos[1] + dc
+            if not is_valid(nr, nc):
                 data = env.step()
-            state = read_state(data, tracker)
-            hops += 1
-            print(f"  #{hops:3d} DISC! → {state.qbert}  cubes={cubes}/{NUM_CUBES}")
-            continue
+                continue
 
-        dr, dc = MOVE_DELTAS[action]
-        nr, nc = pos[0] + dr, pos[1] + dc
-        if not is_valid(nr, nc):
-            data = env.step()
-            continue
-
-        # Execute hop: hold button, then wait for Q*bert to be fully landed
-        # (qb_anim >= 16 = ready for next input). This ensures the grid word
-        # has stabilized and the position we read is correct.
-        port, field = MOVE_BUTTONS[action]
-        pos_before = pos
-        env.step_n(port, field, 6)
-        for _ in range(35):
-            data = env.step()
-            if data.get("qb_anim", 0) >= 16:
-                break
-        # Verify hop registered
-        state = read_state(data, tracker)
-        if state.qbert == pos_before:
-            # Hop didn't register — retry on next iteration
-            continue
-
-        # Track progress
-        new_cubes = NUM_CUBES - state.remaining_cubes
-        if new_cubes > _last_cubes:
-            _hops_since_cube = 0
-            _last_cubes = new_cubes
-        else:
-            _hops_since_cube += 1
-
-        # Debug: log every decision with enemies for tracing deaths
-        new_pos = state.qbert
-        for e in state.enemies:
-            if not e.harmless and is_valid(e.pos[0], e.pos[1]):
-                from qbert.strategy import grid_dist as gd2
-                d = gd2(new_pos[0], new_pos[1], e.pos[0], e.pos[1])
-                if d <= 2:
-                    from qbert.sim import MOVE_DELTAS as MD
-                    print(f"  h{hops}: {pos_before}→{new_pos} a={action} "
-                          f"s{e.slot}:{e.etype}@{e.pos} fl={e.flags:#x} "
-                          f"anim={e.anim} d={d}")
+            port, field = MOVE_BUTTONS[action]
+            pos_before = pos
+            env.step_n(port, field, BUTTON_HOLD)
+            for _ in range(35):
+                data = env.step()
+                if data.get("qb_anim", 0) >= 16:
                     break
-        hops += 1
 
-        # Post-hop: check if we're now on an enemy (death imminent)
-        post_state = read_state(data, tracker)
-        for e in post_state.enemies:
-            if not e.harmless and is_valid(e.pos[0], e.pos[1]):
-                if e.pos == post_state.qbert or e.prev_pos == post_state.qbert:
-                    # Death imminent — dump what the sim saw at decision time
-                    print(f"  !! ABOUT TO DIE hop {hops}: Q@{post_state.qbert} "
-                          f"killer=s{e.slot}:{e.etype}@{e.pos} fl={e.flags:#x} anim={e.anim}")
-                    print(f"     Decision was: {pos_before}→{new_pos} action={action}")
-                    print(f"     Sim enemies at decision time:")
-                    for se in state.enemies:
-                        if not se.harmless and is_valid(se.pos[0], se.pos[1]):
-                            print(f"       s{se.slot}:{se.etype}@{se.pos} "
-                                  f"fl={se.flags:#x} anim={se.anim}")
+            state = read_state(data, tracker)
+            if state.qbert == pos_before:
+                continue
+            hops += 1
 
-        state = read_state(data, tracker)
+            # Track progress
+            new_cubes = NUM_CUBES - state.remaining_cubes
+            if new_cubes > last_cubes:
+                hops_since_progress = 0
+                last_cubes = new_cubes
+            else:
+                hops_since_progress += 1
 
-        # Log when enemies are close OR every 10 hops
-        from qbert.strategy import grid_dist as gd
-        any_close = any(
-            not e.harmless and is_valid(e.pos[0], e.pos[1]) and
-            gd(pos[0], pos[1], e.pos[0], e.pos[1]) <= 2
-            for e in state.enemies
-        )
-        if hops % 10 == 0 or any_close:
-            qb_cy = data.get("qb_coll_y", 0)
-            enemy_str = ""
-            for e in state.enemies:
-                if not is_valid(e.pos[0], e.pos[1]):
-                    continue
-                from qbert.strategy import grid_dist
-                d = grid_dist(pos[0], pos[1], e.pos[0], e.pos[1])
-                e_cy = data.get(f"e{e.slot}_coll_y", 0)
-                cy_diff = abs(qb_cy - e_cy)
-                enemy_str += (f"\n    s{e.slot}:{e.etype} @{e.pos} "
-                              f"st={e.state} fl={e.flags:#x} d={d} "
-                              f"cy={e_cy} qcy={qb_cy} diff={cy_diff}")
-            tgt = f" →{_target}" if _target else ""
-            print(f"  hop {hops}: {state.qbert} cubes={cubes}/{NUM_CUBES}{tgt} lives={state.lives}{enemy_str}")
+            # Log every 10 hops
+            if hops % 10 == 0:
+                coily = find_coily(state)
+                cd = grid_dist(pos[0], pos[1], coily[0], coily[1]) if coily else 99
+                tgt = pick_target(state)
+                print(f"  hop {hops}: {state.qbert} cubes={new_cubes}/{NUM_CUBES} "
+                      f"→{tgt} cd={cd} lives={state.lives} "
+                      f"stuck={hops_since_progress}")
 
-    print(f"\nSurvived {hops} hops total")
-    env.close()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        print(f"\nTotal hops: {hops}")
+        env.close()
 
 
 if __name__ == "__main__":
