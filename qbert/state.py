@@ -274,9 +274,10 @@ def read_state(data, tracker=None):
             harmless = False
 
         coll_y = data.get(f"e{n}_coll_y", 0)
-        # Don't filter by coll_y — the renderer draws entities with coll_y=0
-        # and they ARE dangerous. Pixel test confirmed 7.5% miss rate from
-        # this filter with zero false positives when removed.
+        # ROM $B576/$B6C6: entity is INACTIVE when [bp+0xD] (coll_y) == 0.
+        # This is the ROM's own check — same one the renderer uses.
+        if coll_y == 0:
+            continue
 
         enemies.append(Enemy(
             slot=n, pos=pos, prev_pos=prev,
