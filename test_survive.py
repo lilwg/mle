@@ -212,19 +212,35 @@ def is_sequence_safe(state, actions):
 # ── Decision logic ──────────────────────────────────────────────────
 
 def find_coily(state):
-    """Find confirmed Coily position (tracker-confirmed etype='coily')."""
+    """Find hatched Coily (actively chasing, not pre-hatch purple ball).
+    Only returns Coily with fl=0x68 or tracker-confirmed going upward."""
     for e in state.enemies:
-        if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
+        if e.etype == "coily" and e.flags == 0x68 and is_valid(e.pos[0], e.pos[1]):
+            return e.pos
+    # Also catch Coily with fl=0x60 if tracker confirmed AND at row < 5
+    # (row >= 5 could still be pre-hatch bouncing down)
+    for e in state.enemies:
+        if e.etype == "coily" and e.going_up and is_valid(e.pos[0], e.pos[1]):
             return e.pos
     return None
 
 
-def pick_target(state):
-    """Pick next cube to color. (6,6) first (safe diagonal), then nearest."""
+def pick_target(state, coily_dead=False):
+    """Pick next cube to color.
+    - (6,6) first (safe diagonal from start)
+    - When Coily is dead: target remaining dead-end corners immediately
+    - Otherwise: nearest uncolored
+    """
     qr, qc = state.qbert
     idx = pos_to_cube_index(6, 6)
     if idx is not None and state.cube_states[idx] != state.target_color:
         return (6, 6)
+    # When Coily dead, hit corners while it's safe
+    if coily_dead:
+        for corner in [(6, 0), (6, 6)]:
+            idx = pos_to_cube_index(corner[0], corner[1])
+            if idx is not None and state.cube_states[idx] != state.target_color:
+                return corner
     best_d, best = 999, None
     for row in range(MAX_ROW + 1):
         for col in range(row + 1):
@@ -257,15 +273,18 @@ def decide(state, hops_since_progress):
         return DOWN
 
     coily = find_coily(state)
+    coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
 
-    # ── Disc: take immediately if at launch point with Coily active ──
-    if coily and state.discs:
+    # ── Disc: take when at launch point AND Coily within 1 ──
+    # Coily must be RIGHT BEHIND Q*bert to follow off the edge and die
+    if coily and state.discs and coily_d <= 1:
         for disc in state.discs:
             if (row, col) == disc.jump_from:
                 return disc.direction
 
     # ── Pick routing target ──
-    target = pick_target(state)
+    # No Coily = dead (post-disc) → target corners while safe
+    target = pick_target(state, coily_dead=(coily is None))
 
     if coily and state.discs and hops_since_progress >= DISC_STALL_THRESHOLD:
         disc, dd = nearest_disc(state, (row, col))
