@@ -307,9 +307,23 @@ def decide(state, hops_since_progress):
     coily = find_coily(state)
     coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
 
+    # ── Disc: take when at launch point with Coily close ──
+    if coily and state.discs and coily_d <= 2:
+        for disc in state.discs:
+            if (row, col) == disc.jump_from:
+                return disc.direction
+
     # ── Pick routing target ──
-    # No Coily = dead (post-disc) → target corners while safe
+    # No Coily → target corners while safe
+    # Coily + stuck → route toward disc
     target = pick_target(state, coily_dead=(coily is None))
+    if coily and state.discs and hops_since_progress >= DISC_STALL_THRESHOLD:
+        disc, dd = nearest_disc(state, (row, col))
+        if disc:
+            for a, r, c in valid:
+                if (r, c) == disc.jump_from:
+                    return a  # 1 hop from disc, go there
+            target = disc.jump_from
 
     # ── Positions to avoid (dead-end corners when Coily active) ──
     avoid = DEAD_END_CORNERS if coily else set()
