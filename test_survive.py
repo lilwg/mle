@@ -336,6 +336,17 @@ def run():
                     data = env.step()
                 continue
 
+            # Log nearby enemies at decision time for death tracing
+            dr2, dc2 = MOVE_DELTAS[action]
+            dest = (pos[0] + dr2, pos[1] + dc2)
+            for e in state.enemies:
+                if not e.harmless and is_valid(e.pos[0], e.pos[1]):
+                    d = grid_dist(pos[0], pos[1], e.pos[0], e.pos[1])
+                    if d <= 2:
+                        print(f"  pre{hops}: {pos}→{dest} "
+                              f"s{e.slot}:{e.etype}@{e.pos} "
+                              f"fl={e.flags:#x} anim={e.anim} d={d}")
+
             # Disc ride?
             is_disc = False
             for disc in state.discs:

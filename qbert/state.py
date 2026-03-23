@@ -94,15 +94,22 @@ class EnemyTracker:
     def __init__(self):
         self._is_coily = {}
 
-    def update(self, slot, pos, prev_pos):
+    def update(self, slot, pos, prev_pos, flags=0):
         if is_valid(pos[0], pos[1]) and is_valid(prev_pos[0], prev_pos[1]):
-            # Only count as upward movement if it's a single hop (distance 1).
-            # Larger jumps indicate slot reuse (new entity in old slot with
-            # stale prev grid word), not actual Coily movement.
+            # Single-hop upward movement = Coily chasing
             dr = abs(pos[0] - prev_pos[0])
             dc = abs(pos[1] - prev_pos[1])
             if pos[0] < prev_pos[0] and dr == 1 and dc <= 1:
                 self._is_coily[slot] = True
+        # fl=0x68 is the definitive hatched Coily flag.
+        # But fl alternates between 0x60/0x68 — if we ever see 0x68
+        # for this slot, it's permanently Coily.
+        if flags == 0x68:
+            self._is_coily[slot] = True
+        # Also: if fl=0x60 and entity is at row >= 6 (bottom), it's about
+        # to hatch or just hatched. Mark as Coily.
+        if flags == 0x60 and is_valid(pos[0], pos[1]) and pos[0] >= 6:
+            self._is_coily[slot] = True
 
     def is_coily(self, slot):
         return self._is_coily.get(slot, False)
@@ -230,7 +237,7 @@ def read_state(data, tracker=None):
         going_up = pos[0] < prev[0] if is_valid(prev[0], prev[1]) else False
 
         if tracker:
-            tracker.update(n, pos, prev)
+            tracker.update(n, pos, prev, flags)
             is_coily = tracker.is_coily(n)
         else:
             is_coily = going_up
