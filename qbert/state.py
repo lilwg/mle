@@ -243,7 +243,7 @@ def read_state(data, tracker=None):
             # Sam/Slick: harmless green enemies (flags & 0x06 >= 4)
             etype = "sam"
             harmless = True
-        elif flags == 0x68 or is_coily:
+        elif flags == 0x68 or is_coily or (going_up and flag_type == 0):
             etype = "coily"
             harmless = False
         else:

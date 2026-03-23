@@ -566,9 +566,15 @@ def run():
         for e in post_state.enemies:
             if not e.harmless and is_valid(e.pos[0], e.pos[1]):
                 if e.pos == post_state.qbert or e.prev_pos == post_state.qbert:
-                    print(f"  !! POST-HOP DANGER hop {hops}: Q@{post_state.qbert} "
-                          f"s{e.slot}:{e.etype}@{e.pos} prev={e.prev_pos} "
-                          f"fl={e.flags:#x} anim={e.anim}")
+                    # Death imminent — dump what the sim saw at decision time
+                    print(f"  !! ABOUT TO DIE hop {hops}: Q@{post_state.qbert} "
+                          f"killer=s{e.slot}:{e.etype}@{e.pos} fl={e.flags:#x} anim={e.anim}")
+                    print(f"     Decision was: {pos_before}→{new_pos} action={action}")
+                    print(f"     Sim enemies at decision time:")
+                    for se in state.enemies:
+                        if not se.harmless and is_valid(se.pos[0], se.pos[1]):
+                            print(f"       s{se.slot}:{se.etype}@{se.pos} "
+                                  f"fl={se.flags:#x} anim={se.anim}")
 
         state = read_state(data, tracker)
 
