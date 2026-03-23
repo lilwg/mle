@@ -238,9 +238,16 @@ def decide_survive(state):
                 target = e.pos
                 break
 
+    # Avoid dead-end corners when Coily is active
+    avoid = set()
+    if coily:
+        avoid = {(6, 0), (6, 6)}
+
     # Try all 3-hop sequences toward target
     safe_first_moves = {}
     for a1, r1, c1 in valid:
+        if (r1, c1) in avoid:
+            continue
         for a2, r2, c2 in neighbors(r1, c1):
             for a3, r3, c3 in neighbors(r2, c2):
                 if _is_sequence_safe(state, [a1, a2, a3]):
@@ -249,25 +256,41 @@ def decide_survive(state):
                         safe_first_moves[a1] = d
 
     if safe_first_moves:
-        best = min(safe_first_moves, key=safe_first_moves.get)
-        # Debug: check if the chosen move goes to a known enemy position
-        dr, dc = MOVE_DELTAS[best]
-        dest = (row + dr, col + dc)
-        for e in state.enemies:
-            if not e.harmless and e.pos == dest and is_valid(dest[0], dest[1]):
-                print(f"  !!! SIM APPROVED MOVE TO ENEMY: {(row,col)}→{dest} "
-                      f"s{e.slot}:{e.etype}@{e.pos} anim={e.anim}")
-        return best
+        return min(safe_first_moves, key=safe_first_moves.get)
 
-    # No safe cube-collecting moves. If Coily active and discs available,
-    # route toward nearest disc as escape plan.
+    # No safe cube moves but discs available — try 3-hop toward disc
+    if coily and state.discs:
+        best_dd = 999
+        disc_target = None
+        for disc in state.discs:
+            if (row, col) == disc.jump_from:
+                return disc.direction
+            dd = grid_dist(row, col, disc.jump_from[0], disc.jump_from[1])
+            if dd < best_dd:
+                best_dd = dd
+                disc_target = disc.jump_from
+
+        disc_3hop = {}
+        for a1, r1, c1 in valid:
+            if (r1, c1) in avoid:
+                continue
+            for a2, r2, c2 in neighbors(r1, c1):
+                for a3, r3, c3 in neighbors(r2, c2):
+                    if _is_sequence_safe(state, [a1, a2, a3]):
+                        d = grid_dist(r1, c1, disc_target[0], disc_target[1])
+                        if a1 not in disc_3hop or d < disc_3hop[a1]:
+                            disc_3hop[a1] = d
+        if disc_3hop:
+            return min(disc_3hop, key=disc_3hop.get)
+
+    # No safe cube-collecting moves. Route toward disc or just survive.
     if coily and state.discs:
         # If already at a disc, take it
         for disc in state.discs:
             if (row, col) == disc.jump_from:
                 return disc.direction
 
-        # Route toward nearest disc
+        # Route toward nearest disc with ANY safe move (even 1-hop)
         best_dd = 999
         disc_target = None
         for disc in state.discs:
@@ -276,18 +299,22 @@ def decide_survive(state):
                 best_dd = dd
                 disc_target = disc.jump_from
 
-        # Find safe moves toward the disc
         disc_moves = {}
-        for a1, r1, c1 in valid:
-            if _is_sequence_safe(state, [a1]):
-                d = grid_dist(r1, c1, disc_target[0], disc_target[1])
-                if a1 not in disc_moves or d < disc_moves[a1]:
-                    disc_moves[a1] = d
+        for a, r, c in valid:
+            if (r, c) in avoid:
+                continue
+            if _is_sequence_safe(state, [a]):
+                d = grid_dist(r, c, disc_target[0], disc_target[1])
+                disc_moves[a] = d
         if disc_moves:
             return min(disc_moves, key=disc_moves.get)
 
-    # No safe moves toward cubes or disc — just pick any safe move
-    # to keep running (Q*bert is faster than Coily)
+    # Just pick any safe move to keep running
+    for a, r, c in valid:
+        if (r, c) not in avoid and _is_sequence_safe(state, [a]):
+            return a
+
+    # Even unsafe — pick any move with escape routes rather than waiting
     for a, r, c in valid:
         if _is_sequence_safe(state, [a]):
             return a
@@ -314,9 +341,9 @@ def _pick_target(state):
             _target = None
 
     if _target is None:
-        # Prioritize dead-end corners — hit them before Coily hatches (~hop 35).
-        # (6,6) first since it's a straight diagonal from (0,0).
-        for corner in [(6, 6), (6, 0)]:
+        # Prioritize (6,6) corner — straight diagonal from (0,0), do it first.
+        # (6,0) comes naturally during collection or after disc ride.
+        for corner in [(6, 6)]:
             idx = pos_to_cube_index(corner[0], corner[1])
             if idx is not None and state.cube_states[idx] != state.target_color:
                 _target = corner
