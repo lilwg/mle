@@ -239,9 +239,8 @@ def read_state(data, tracker=None):
         # Flags byte bits 1-2 (mask 0x06): >= 4 means Sam/Slick (harmless)
         # fl=0x68: definitively hatched Coily (flags change from 0x60 to 0x68 at hatch)
         flag_type = flags & 0x06
-        if flag_type >= 4 or flags == 0x20:
-            # Sam/Slick: harmless green enemies. flags & 0x06 >= 4,
-            # or fl=0x20 (Sam variant seen in level 2+)
+        if flag_type >= 4:
+            # Sam/Slick: harmless green enemies (flags & 0x06 >= 4)
             etype = "sam"
             harmless = True
         elif flags == 0x68 or is_coily:
