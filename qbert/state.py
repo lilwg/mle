@@ -102,13 +102,11 @@ class EnemyTracker:
             if pos[0] < prev_pos[0] and dr == 1 and dc <= 1:
                 self._is_coily[slot] = True
         # fl=0x68 is the definitive hatched Coily flag.
-        # But fl alternates between 0x60/0x68 — if we ever see 0x68
+        # fl alternates between 0x60/0x68 after hatch — if we ever see 0x68
         # for this slot, it's permanently Coily.
+        # DON'T mark fl=0x60 at row>=6 — that's a pre-hatch purple ball
+        # that hasn't confirmed as Coily yet. Wait for 0x68 or upward movement.
         if flags == 0x68:
-            self._is_coily[slot] = True
-        # Also: if fl=0x60 and entity is at row >= 6 (bottom), it's about
-        # to hatch or just hatched. Mark as Coily.
-        if flags == 0x60 and is_valid(pos[0], pos[1]) and pos[0] >= 6:
             self._is_coily[slot] = True
 
     def is_coily(self, slot):
@@ -226,8 +224,9 @@ def read_state(data, tracker=None):
             on_face_check = (not is_valid(pos_check[0], pos_check[1])
                              and pos_check[0] >= 1
                              and (pos_check[1] < 0 or pos_check[1] > pos_check[0]))
-            if on_face_check and flags != 0 and anim > 0:
-                # Ugg/Wrongway: on pyramid face, st flickers — keep if animating
+            if on_face_check and flags != 0:
+                # Ugg/Wrongway: on pyramid face, st==0 but flags non-zero
+                # Keep regardless of anim (anim=0 = mid-hop, still active)
                 pass
             elif flags != 0 and anim > 0 and is_valid(pos_check[0], pos_check[1]):
                 # Flickering active enemy — include it
@@ -255,10 +254,11 @@ def read_state(data, tracker=None):
         # fl=0x68: definitively hatched Coily (flags change from 0x60 to 0x68 at hatch)
         flag_type = flags & 0x06
         off_grid = not is_valid(pos[0], pos[1])
-        # Ugg/Wrongway: off-grid on pyramid FACES (row >= 1, col < 0 or col > row).
-        # NOT spawn point (row < 0) which is where Sam/Slick also spawns.
-        # Any entity on a face is deadly regardless of flags byte.
-        on_face = off_grid and pos[0] >= 1 and (pos[1] < 0 or pos[1] > pos[0])
+        # Ugg/Wrongway: off-grid on pyramid FACES (row 1-7, col < 0 or col > row).
+        # NOT spawn point (row < 0) and not far past the pyramid (row > 7).
+        # Ghost entries have stale positions at row 10+ — exclude those.
+        on_face = (off_grid and 1 <= pos[0] <= 7
+                   and (pos[1] < 0 or pos[1] > pos[0]))
         if on_face:
             etype = "ugg"
             harmless = False
@@ -277,7 +277,7 @@ def read_state(data, tracker=None):
         # Skip phantom entries: coll_y == 0 means no real screen presence.
         # Exception: Ugg/Wrongway are off-grid and may have coll_y == 0
         # while still being deadly to adjacent edge cubes.
-        if coll_y == 0 and not (on_face and anim > 0):
+        if coll_y == 0 and not (on_face and (st != 0 or anim > 0)):
             continue
 
         enemies.append(Enemy(

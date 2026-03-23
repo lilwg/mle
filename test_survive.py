@@ -323,14 +323,14 @@ def is_sequence_safe(state, actions):
 # ── Decision logic ──────────────────────────────────────────────────
 
 def find_coily(state):
-    """Find Coily. The state reader classifies via tracker (fl=0x68 seen,
-    upward movement, or fl=0x60 at row>=6). Trust that classification,
-    but exclude pre-hatch balls still bouncing down at row <= 4."""
+    """Find hatched Coily only. Exclude pre-hatch purple balls.
+    Coily is confirmed by: fl=0x68 seen (tracker), or upward movement.
+    Purple balls (fl=0x60) bouncing down are NOT Coily yet."""
     for e in state.enemies:
         if e.etype != "coily" or e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue
-        # Exclude pre-hatch: fl=0x60 at row <= 4, bouncing down
-        if e.flags == 0x60 and e.pos[0] <= 4 and not e.going_up:
+        # Exclude any fl=0x60 that's bouncing down — still a purple ball
+        if e.flags == 0x60 and not e.going_up:
             continue
         return e.pos
     return None
@@ -482,11 +482,12 @@ def execute_disc(env, action, tracker, used_discs, disc):
 
 def run():
     env = MameEnv(ROMS_PATH, "qbert", QBERT_RAM, render=True, sound=False,
-                  throttle=True)
+                  throttle=False)
     tracker = EnemyTracker()
 
-    # Start game
-    env.wait(700)
+    # Start game (randomize wait to vary MAME RNG seed)
+    import random
+    env.wait(600 + random.randint(0, 200))
     env.step_n(*COIN_BUTTON, 15)
     env.wait(180)
     env.step_n(*START_BUTTON, 5)
