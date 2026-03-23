@@ -244,16 +244,16 @@ def is_sequence_safe(state, actions):
 # ── Decision logic ──────────────────────────────────────────────────
 
 def find_coily(state):
-    """Find hatched Coily (actively chasing, not pre-hatch purple ball).
-    Only returns Coily with fl=0x68 or tracker-confirmed going upward."""
+    """Find Coily. The state reader classifies via tracker (fl=0x68 seen,
+    upward movement, or fl=0x60 at row>=6). Trust that classification,
+    but exclude pre-hatch balls still bouncing down at row <= 4."""
     for e in state.enemies:
-        if e.etype == "coily" and e.flags == 0x68 and is_valid(e.pos[0], e.pos[1]):
-            return e.pos
-    # Also catch Coily with fl=0x60 if tracker confirmed AND at row < 5
-    # (row >= 5 could still be pre-hatch bouncing down)
-    for e in state.enemies:
-        if e.etype == "coily" and e.going_up and is_valid(e.pos[0], e.pos[1]):
-            return e.pos
+        if e.etype != "coily" or e.harmless or not is_valid(e.pos[0], e.pos[1]):
+            continue
+        # Exclude pre-hatch: fl=0x60 at row <= 4, bouncing down
+        if e.flags == 0x60 and e.pos[0] <= 4 and not e.going_up:
+            continue
+        return e.pos
     return None
 
 
@@ -307,25 +307,9 @@ def decide(state, hops_since_progress):
     coily = find_coily(state)
     coily_d = grid_dist(row, col, coily[0], coily[1]) if coily else 99
 
-    # ── Disc: take when at launch point AND Coily within 1 ──
-    # Coily must be RIGHT BEHIND Q*bert to follow off the edge and die
-    if coily and state.discs and coily_d <= 1:
-        for disc in state.discs:
-            if (row, col) == disc.jump_from:
-                return disc.direction
-
     # ── Pick routing target ──
     # No Coily = dead (post-disc) → target corners while safe
     target = pick_target(state, coily_dead=(coily is None))
-
-    if coily and state.discs and hops_since_progress >= DISC_STALL_THRESHOLD:
-        disc, dd = nearest_disc(state, (row, col))
-        if disc:
-            # Force final hop to disc if 1 away
-            for a, r, c in valid:
-                if (r, c) == disc.jump_from:
-                    return a
-            target = disc.jump_from
 
     # ── Positions to avoid (dead-end corners when Coily active) ──
     avoid = DEAD_END_CORNERS if coily else set()
@@ -352,6 +336,17 @@ def decide(state, hops_since_progress):
     for a, r, c in valid:
         if is_sequence_safe(state, [a]):
             return a
+
+    # ── Last resort: take disc if at launch point (all moves are death) ──
+    if state.discs:
+        for disc in state.discs:
+            if (row, col) == disc.jump_from:
+                return disc.direction
+        # Or force hop to disc if 1 away
+        for disc in state.discs:
+            for a, r, c in valid:
+                if (r, c) == disc.jump_from:
+                    return a
 
     return None  # wait
 
