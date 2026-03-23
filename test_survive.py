@@ -57,24 +57,17 @@ def wait_until_landed(env):
 
 
 def wait_for_level_start(env, tracker):
-    """Wait for a new level to become playable. Probe with a button press
-    to detect when Q*bert can move."""
-    for _ in range(3000):
+    """Wait for a new level to become playable."""
+    data = env.step()
+    for _ in range(600):
         data = env.step()
         state = read_state(data, tracker)
         pos = state.qbert
         if (is_valid(pos[0], pos[1]) and pos[0] <= 1
                 and state.lives > 0
+                and state.remaining_cubes > 0
                 and data.get("qb_anim", 0) >= 16):
-            gw_before = (data.get("qb_gw0", 0), data.get("qb_gw1", 0))
-            env.step_n(":IN4", "P1 Right (Down-Right)", BUTTON_HOLD)
-            for _ in range(20):
-                data = env.step()
-                if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
-                    break
-            if (data.get("qb_gw0", 0), data.get("qb_gw1", 0)) != gw_before:
-                data = wait_until_landed(env)
-                return data, read_state(data, tracker)
+            return data, state
     return data, read_state(data, tracker)
 
 
@@ -490,12 +483,6 @@ def run():
                 hops_since_progress = 0
                 last_cubes = 0
                 tracker.reset()
-                # Wait for level transition — poll instead of fixed wait
-                for _ in range(600):
-                    data = env.step()
-                    state = read_state(data, tracker)
-                    if state.remaining_cubes > 0 and is_valid(state.qbert[0], state.qbert[1]):
-                        break
                 data, state = wait_for_level_start(env, tracker)
                 prev_lives = state.lives
                 hops = 1
