@@ -418,7 +418,22 @@ def decide(state, hops_since_progress):
                 if (r, c) == disc.jump_from:
                     return a
 
-    return None  # wait
+    # Never wait — standing still is death. Pick the move furthest from enemies.
+    if valid:
+        best_a, best_d = valid[0][0], -1
+        for a, r, c in valid:
+            min_enemy_d = 99
+            for e in state.enemies:
+                if e.harmless or not is_valid(e.pos[0], e.pos[1]):
+                    continue
+                ed = grid_dist(r, c, e.pos[0], e.pos[1])
+                if ed < min_enemy_d:
+                    min_enemy_d = ed
+            if min_enemy_d > best_d:
+                best_d = min_enemy_d
+                best_a = a
+        return best_a
+    return DOWN  # truly no moves
 
 
 # ── Game loop ───────────────────────────────────────────────────────
