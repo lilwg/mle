@@ -8,6 +8,10 @@ NUM_CUBES = 28
 QBERT_RAM = {
     "lives": 0x0D00,
     "score": 0x00BE,
+    "qb_sy_lo": 0x0D58,   # Q*bert screen Y low
+    "qb_sy_hi": 0x0D59,   # Q*bert screen Y high
+    "qb_sx_lo": 0x0D5A,   # Q*bert screen X low
+    "qb_sx_hi": 0x0D5B,   # Q*bert screen X high
     "qb_gw0": 0x0D66,
     "qb_gw1": 0x0D67,
     "qb_prev0": 0x0D68,
@@ -37,10 +41,15 @@ for _c in range(NUM_CUBES):
 for _n in range(10):
     _base = 0x0D70 + _n * 22
     QBERT_RAM[f"e{_n}_st"] = _base
+    QBERT_RAM[f"e{_n}_sy_lo"] = _base + 4   # screen Y low byte
+    QBERT_RAM[f"e{_n}_sy_hi"] = _base + 5   # screen Y high byte
+    QBERT_RAM[f"e{_n}_sx_lo"] = _base + 6   # screen X low byte
+    QBERT_RAM[f"e{_n}_sx_hi"] = _base + 7   # screen X high byte
     QBERT_RAM[f"e{_n}_flags"] = _base + 10
     QBERT_RAM[f"e{_n}_anim"] = _base + 11
     QBERT_RAM[f"e{_n}_coll_y"] = _base + 13
     QBERT_RAM[f"e{_n}_dir"] = _base + 14
+    QBERT_RAM[f"e{_n}_hops"] = _base + 15   # hops_remaining
     QBERT_RAM[f"e{_n}_gw0"] = _base + 18
     QBERT_RAM[f"e{_n}_gw1"] = _base + 19
     QBERT_RAM[f"e{_n}_pw0"] = _base + 20
@@ -247,33 +256,22 @@ def read_state(data, tracker=None):
         else:
             is_coily = going_up
 
-        # Classify enemy type using flags byte and tracker.
-        # ROM collision $BD41: flag_type >= 4 → Sam/Slick handler (harmless).
-        # This applies regardless of position — Sam on a pyramid face is still harmless.
-        # Actual Ugg flags: 0x25 (right), 0x27 (left) — these have flag_type=4/6
-        # but are deadly. However they also have fl & 0xE0 = 0x20, same as balls.
-        # The ROM at $BD72 checks [di+0xF] (hops_remaining) for Sam collision.
+        # ROM-accurate classification using upper bits of flags
+        from qbert.collision import classify_entity_rom
         flag_type = flags & 0x06
-        off_grid = not is_valid(pos[0], pos[1])
-        on_face = (off_grid and 1 <= pos[0] <= 7
-                   and (pos[1] < 0 or pos[1] > pos[0]))
-        if flag_type >= 4:
-            if flags in (0x25, 0x27):
-                # Ugg (0x25) / Wrongway (0x27): deadly, on pyramid faces
-                etype = "ugg"
-                harmless = False
-            else:
-                # Sam/Slick: harmless (fl=0x44, 0x46, 0x4A, etc.)
-                etype = "sam"
-                harmless = True
-        elif flags == 0x68 or is_coily:
-            # Only confirmed Coily: fl=0x68 definitive, or tracker confirmed
-            # Remove `going_up and flag_type == 0` — catches fl=0x20 balls
-            etype = "coily"
-            harmless = False
-        else:
+        etype, harmless, _bit5 = classify_entity_rom(flags, flag_type, flag_type)
+
+        # For sim MOVEMENT prediction: pre-hatch Coily (0x60) bouncing
+        # down uses ball movement, not Coily chase. Only use "coily"
+        # behavior when tracker has confirmed chasing (seen 0x68/going up).
+        if etype == "coily" and not is_coily:
+            # Pre-hatch: classify as "ball" for movement prediction
+            # but keep harmless=False (it IS deadly)
             etype = "ball"
-            harmless = False
+
+        # Tracker can also promote to Coily
+        if etype == "ball" and is_coily:
+            etype = "coily"
 
         coll_y = data.get(f"e{n}_coll_y", 0)
         # ROM $B576/$B6C6: entity is INACTIVE when [bp+0xD] (coll_y) == 0.
