@@ -202,8 +202,9 @@ def _step_enemy(en, qpos, qprev):
         en[0] = new_pos
     elif en[5] in (0x60, 0x68) and etype != "coily":
         # Purple ball falls off bottom → hatches into Coily
+        # First hop is immediate (30f flight), not full COILY_RELOAD
         en[3] = "coily"
-        en[2] = COILY_RELOAD
+        en[2] = 30  # immediate first hop (flight time only)
     else:
         en[0] = (-1, -1)  # deactivated
 
