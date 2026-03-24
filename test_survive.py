@@ -497,7 +497,34 @@ def execute_hop(env, action, tracker):
                     if npos == dest:
                         return None
     port, field = MOVE_BUTTONS[action]
-    env.step_n(port, field, BUTTON_HOLD)
+    # Split hop: press 3 frames, re-check, press remaining 3.
+    # This catches enemies that moved during the first 3 frames.
+    env.step_n(port, field, 3)
+    data2 = env.step()
+    state2 = read_state(data2, tracker)
+    # Re-check with fresh positions
+    for e in state2.enemies:
+        if e.harmless or not is_valid(e.pos[0], e.pos[1]):
+            continue
+        if e.pos == dest:
+            # Enemy arrived at dest during first 3 frames — too late to
+            # fully abort (button already held) but we can stop pressing.
+            # Q*bert may still hop but at least we detected it.
+            return wait_until_landed(env)
+        d = grid_dist(e.pos[0], e.pos[1], dest[0], dest[1])
+        if d <= 1 and e.anim > 0:
+            if e.etype == "coily":
+                np2 = predict_coily(e.pos[0], e.pos[1],
+                                    state2.qbert_prev[0], state2.qbert_prev[1])
+                if np2 == dest:
+                    # Can still abort if Q*bert hasn't started flying
+                    if data2.get("qb_anim", 0) >= 16:
+                        return None  # abort — Q*bert still grounded
+            elif e.etype == "ball":
+                for npos in [(e.pos[0]+1, e.pos[1]), (e.pos[0]+1, e.pos[1]+1)]:
+                    if npos == dest and data2.get("qb_anim", 0) >= 16:
+                        return None  # abort
+    env.step_n(port, field, BUTTON_HOLD - 3)
     return wait_until_landed(env)
 
 
