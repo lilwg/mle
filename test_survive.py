@@ -13,6 +13,7 @@ from qbert.state import (
 from qbert.sim import MOVE_DELTAS, UP, DOWN, LEFT, RIGHT
 from qbert.predict import predict_coily
 from qbert.planner import neighbors, MOVE_BUTTONS, COIN_BUTTON, START_BUTTON
+from qbert.spawn import is_spawn_imminent, spawn_danger_at, frames_until_next_spawn
 
 ROMS_PATH = "/Users/pat/mame/roms"
 
@@ -446,6 +447,9 @@ def execute_hop(env, action, tracker):
     state = read_state(data, tracker)
     dest = (state.qbert[0] + dr, state.qbert[1] + dc)
     qpos = state.qbert
+    # Spawn danger: don't hop to (1,0)/(1,1) when spawn is imminent
+    if spawn_danger_at(data, dest, threshold=25):
+        return None
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue

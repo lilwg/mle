@@ -23,8 +23,13 @@ QBERT_RAM = {
     **{f"disc_r{r}_hi": 0x0ECC + r * 4 + 1 for r in range(7)},
     **{f"disc_l{r}": 0x0ECC + r * 4 + 0x1C for r in range(7)}, # left side
     **{f"disc_l{r}_hi": 0x0ECC + r * 4 + 0x1C + 1 for r in range(7)},
-    # Spawn timer: $0085 is 8-bit countdown, spawn happens at 0, reloads from $0D17
-    "spawn_countdown": 0x0085,
+    # Spawn system (ROM $7468): 16-bit timer, decremented each frame
+    "spawn_timer_lo": 0x0085,
+    "spawn_timer_hi": 0x0086,
+    "spawn_interval_lo": 0x0D17,  # reload value
+    "spawn_interval_hi": 0x0D18,
+    "game_flags": 0x0D01,         # bit2=Coily spawning, bit3=Coily hatching
+    "qb_state": 0x0D5E,           # bit4=suppress spawn timer
     # Q*bert animation counter: 0 = mid-hop, >= 16 = ready for next hop
     "qb_anim": 0x0D5F,
     # Q*bert collision Y (used in distance check before grid word comparison)
