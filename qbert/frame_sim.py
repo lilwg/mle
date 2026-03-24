@@ -52,20 +52,49 @@ def build_entities(state):
         if e.harmless:
             continue
         anim = e.anim
+        etype = e.etype
         if anim == 0 or (1 <= anim <= 5):
-            # In-flight: entity gw already shows destination.
-            # Conservative: assume landing soon (5 frames left).
-            anim = -(FLIGHT_FRAMES - 5)  # 5 frames from landing
+            # In-flight: gw shows DESTINATION, entity flying from prev_pos.
+            # Add TWO entries like the old sim:
+            # 1. Destination (will land here) — in flight, ~15 frames left
+            # 2. Also predict NEXT position after landing (blocks future)
+            from qbert.predict import predict_coily as _pc
+            # Entity at destination, will land and stay for ~RELOAD frames
+            # Match old sim behavior: block destination for ~30 frames
+            anim_dest = -1  # about to land (1 frame from landing)
+            entities.append(make_entity(
+                e.pos, e.prev_pos, anim_dest, etype,
+                e.direction_bits, e.flags, hops=6
+            ))
+            # Predict next hop from destination
+            qpos, qprev = state.qbert, state.qbert_prev
+            if etype == "coily":
+                target = qprev if e.pos != qprev else qpos
+                nxt = _pc(e.pos[0], e.pos[1], target[0], target[1])
+            elif etype == "ball":
+                d = e.direction_bits
+                if d & 1:
+                    nxt = (e.pos[0]+1, e.pos[1]+1)
+                else:
+                    nxt = (e.pos[0]+1, e.pos[1])
+            else:
+                nxt = None
+            if nxt and is_valid(nxt[0], nxt[1]):
+                # Next position: will arrive after landing + full cycle
+                next_anim = BALL_RELOAD if etype != "coily" else COILY_RELOAD
+                entities.append(make_entity(
+                    nxt, e.pos, next_anim, etype,
+                    e.direction_bits >> 1, e.flags, hops=5
+                ))
+            continue
         elif anim <= HOP_TRIGGER:
-            # At or near trigger point
             anim = HOP_TRIGGER
         # else: anim > 16, waiting (use as-is)
 
         # Purple ball at bottom → about to hatch
-        etype = e.etype
         if etype == "ball" and e.flags in (0x60, 0x68) and e.pos[0] >= 6:
             etype = "coily"
-            anim = HOP_TRIGGER  # trigger immediately
+            anim = HOP_TRIGGER
 
         en = make_entity(
             e.pos, e.prev_pos, anim, etype,

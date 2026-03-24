@@ -212,8 +212,13 @@ def _step_enemy(en, qpos, qprev):
 
 
 def is_sequence_safe(state, actions):
-    """Frame-by-frame simulation: returns True if Q*bert survives
-    all hops in the action sequence."""
+    """Frame-perfect simulation using ROM-accurate tick logic."""
+    from qbert.frame_sim import simulate_sequence
+    return simulate_sequence(state, actions)
+
+
+def _is_sequence_safe_old(state, actions):
+    """OLD approximate simulation — kept as reference."""
     qpos, qprev = state.qbert, state.qbert_prev
     enemies = _build_sim_enemies(state)
 
