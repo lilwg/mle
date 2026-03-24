@@ -372,6 +372,28 @@ def decide(state, hops_since_progress):
                     return a  # 1 hop from disc, go there
             target = disc.jump_from
 
+    # ── Straight-line evasion: when Coily is very close and we're stuck,
+    # move in a straight line away from Coily to drag him, then reverse ──
+    # Only activate when genuinely trapped (stuck + Coily close), not
+    # when we're making normal progress near Coily.
+    if coily and coily_d <= 1 and hops_since_progress >= 3:
+        cr, cc = coily
+        best_away = None
+        best_score = -999
+        for a, r, c in valid:
+            if not is_sequence_safe(state, [a]):
+                continue
+            new_cd = grid_dist(r, c, cr, cc)
+            # Prefer moves that increase Coily distance AND color a cube
+            idx = pos_to_cube_index(r, c)
+            colors_cube = (idx is not None and state.cube_states[idx] != state.target_color)
+            score = new_cd * 3 + (2 if colors_cube else 0)
+            if score > best_score:
+                best_score = score
+                best_away = a
+        if best_away is not None:
+            return best_away
+
     # ── Positions to avoid (dead-end corners when Coily active) ──
     # Exception: don't avoid a corner if it's the last cube (completes the level)
     avoid = set()
