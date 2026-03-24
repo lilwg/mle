@@ -107,8 +107,12 @@ class EnemyTracker:
         # for this slot, it's permanently Coily.
         # DON'T mark fl=0x60 at row>=6 — that's a pre-hatch purple ball
         # that hasn't confirmed as Coily yet. Wait for 0x68 or upward movement.
+        # 0x68 is definitive. 0x62/0x6a are also Coily if going up.
         if flags == 0x68:
             self._is_coily[slot] = True
+        elif flags in (0x62, 0x6a) and is_valid(pos[0], pos[1]) and is_valid(prev_pos[0], prev_pos[1]):
+            if pos[0] < prev_pos[0]:  # going up = chasing
+                self._is_coily[slot] = True
 
     def is_coily(self, slot):
         return self._is_coily.get(slot, False)
