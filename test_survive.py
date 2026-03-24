@@ -472,6 +472,17 @@ def execute_hop(env, action, tracker):
     # Spawn danger: don't hop to (1,0)/(1,1) when spawn is imminent
     if spawn_danger_at(data, dest, threshold=25):
         return None
+    # Bottom-row caution: balls accumulate at rows 5-6. If a ball is
+    # directly above the destination and heading down, it could arrive
+    # during our hop.
+    if dest[0] >= 5:
+        for e in state.enemies:
+            if e.harmless or not is_valid(e.pos[0], e.pos[1]):
+                continue
+            if e.etype in ("ball", "coily") and e.pos[0] == dest[0] - 1:
+                # Ball one row above, could hop to our destination
+                if e.pos[1] == dest[1] or e.pos[1] == dest[1] - 1:
+                    return None
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue
