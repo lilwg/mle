@@ -135,7 +135,8 @@ def _build_sim_enemies(state):
                 anim = anim  # raw countdown, entity won't hop until anim=16
             else:
                 # Normal wait: (anim - 16) ticks wait + 30 flight
-                anim = max(anim - 16, 0) + 30
+                # Bias: enemies arrive ~2 frames earlier than modeled
+                anim = max(anim - 16, 0) + 28  # 30 - 2 safety margin
 
         # Purple ball at bottom with Coily flags → about to hatch
         if etype == "ball" and e.flags in (0x60, 0x68) and pos_e[0] >= 6:
