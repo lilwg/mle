@@ -297,7 +297,8 @@ def pick_target(state, coily_dead=False):
     """Pick next cube to color.
     - (6,6) first (safe diagonal from start)
     - When Coily is dead: target remaining dead-end corners immediately
-    - Otherwise: nearest uncolored
+    - Otherwise: nearest uncolored, but deprioritize dead-end corners
+      when enemies are active (prefer safer alternatives)
     """
     qr, qc = state.qbert
     idx = pos_to_cube_index(6, 6)
@@ -309,12 +310,17 @@ def pick_target(state, coily_dead=False):
             idx = pos_to_cube_index(corner[0], corner[1])
             if idx is not None and state.cube_states[idx] != state.target_color:
                 return corner
+    enemies_active = any(not e.harmless and is_valid(e.pos[0], e.pos[1])
+                         for e in state.enemies)
     best_d, best = 999, None
     for row in range(MAX_ROW + 1):
         for col in range(row + 1):
             idx = pos_to_cube_index(row, col)
             if idx is not None and state.cube_states[idx] != state.target_color:
                 d = grid_dist(qr, qc, row, col)
+                # Penalize dead-end corners when enemies are active
+                if enemies_active and (row, col) in DEAD_END_CORNERS:
+                    d += 4  # prefer safer cubes at similar distance
                 if d < best_d:
                     best_d, best = d, (row, col)
     return best
@@ -400,18 +406,17 @@ def decide(state, hops_since_progress):
         if best_away is not None:
             return best_away
 
-    # ── Positions to avoid (dead-end corners when Coily active) ──
-    # Exception: don't avoid a corner if it's the last cube (completes the level)
+    # ── Positions to avoid (dead-end corners) ──
+    # (6,0) and (6,6) have only 1 neighbor — getting trapped there is death.
+    # Avoid unless: it's the last cube, OR the corner IS the current target.
+    # This prevents Q*bert from wandering into corners as waypoints.
     avoid = set()
-    if coily:
-        for corner in DEAD_END_CORNERS:
-            idx = pos_to_cube_index(corner[0], corner[1])
-            if idx is not None and state.cube_states[idx] == state.target_color:
-                avoid.add(corner)  # already colored, dangerous dead-end
-            elif state.remaining_cubes <= 1:
-                pass  # last cube — go for it even if it's a corner
-            else:
-                avoid.add(corner)
+    for corner in DEAD_END_CORNERS:
+        if state.remaining_cubes <= 1:
+            continue  # last cube — go anywhere
+        if target and corner == target:
+            continue  # actively targeting this corner — allow
+        avoid.add(corner)
 
     # ── Search: 3-hop safe sequences toward target ──
     safe_moves = {}
@@ -432,9 +437,14 @@ def decide(state, hops_since_progress):
     for a, r, c in valid:
         if (r, c) not in avoid and is_sequence_safe(state, [a]):
             return a
-    for a, r, c in valid:
-        if is_sequence_safe(state, [a]):
-            return a
+    # Last resort: prefer non-corner moves even if in avoid
+    safe_fallbacks = [(a, r, c) for a, r, c in valid if is_sequence_safe(state, [a])]
+    if safe_fallbacks:
+        # Prefer moves that don't go to dead-end corners
+        for a, r, c in safe_fallbacks:
+            if (r, c) not in DEAD_END_CORNERS:
+                return a
+        return safe_fallbacks[0][0]  # all options are corners, pick first safe one
 
     # ── Last resort: take disc if at launch point (all moves are death) ──
     if state.discs:
@@ -572,8 +582,8 @@ def run():
     tracker = EnemyTracker()
 
     # Start game (randomize wait to vary MAME RNG seed)
-    import random
-    env.wait(600 + random.randint(0, 200))
+    import random, time
+    env.wait(600 + int(time.time() * 1000) % 200)
     env.step_n(*COIN_BUTTON, 15)
     env.wait(180)
     env.step_n(*START_BUTTON, 5)
@@ -595,6 +605,7 @@ def run():
     level_active = False
     hops_since_progress = 0
     last_cubes = 0
+    prev_cube_snapshot = tuple(state.cube_states)
     current_level = 1
     # Discs now read from RAM $0ECC table automatically by state.py
 
@@ -614,6 +625,7 @@ def run():
                 used_discs = set()  # discs reset each level
                 hops_since_progress = 0
                 last_cubes = 0
+                prev_cube_snapshot = ()
                 tracker.reset()
                 data, state = wait_for_level_start(env, tracker)
                 prev_lives = state.lives
@@ -691,6 +703,7 @@ def run():
                 prev_lives = state.lives
                 tracker.reset()
                 hops_since_progress = 0
+                prev_cube_snapshot = ()
                 # Wait for death animation — poll until Q*bert is valid again
                 for _ in range(300):
                     data = env.step()
@@ -770,10 +783,14 @@ def run():
                       f"{killers}")
 
             # ── Track progress ──
+            # Track any cube state change (not just reaching target_color)
+            # to handle multi-visit levels where cubes change incrementally
             new_cubes = NUM_CUBES - state.remaining_cubes
-            if new_cubes > last_cubes:
+            cube_snapshot = tuple(state.cube_states)
+            if new_cubes > last_cubes or cube_snapshot != prev_cube_snapshot:
                 hops_since_progress = 0
                 last_cubes = new_cubes
+                prev_cube_snapshot = cube_snapshot
             else:
                 hops_since_progress += 1
 
