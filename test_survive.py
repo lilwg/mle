@@ -359,7 +359,11 @@ def decide(state, hops_since_progress):
     # No Coily → target corners while safe
     # Coily + stuck → route toward disc
     target = pick_target(state, coily_dead=(coily is None))
-    if coily and state.discs and hops_since_progress >= DISC_STALL_THRESHOLD:
+    # Route to disc when stuck OR when Coily is dangerously close
+    need_disc = (coily and state.discs and
+                 (hops_since_progress >= DISC_STALL_THRESHOLD or
+                  (coily_d <= 2 and hops_since_progress >= 2)))
+    if need_disc:
         disc, dd = nearest_disc(state, (row, col))
         if disc:
             for a, r, c in valid:
