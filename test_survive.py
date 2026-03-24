@@ -440,9 +440,10 @@ def execute_hop(env, action, tracker):
         # Cross-match
         if e.pos == qpos and e.prev_pos == dest:
             return None
-        # Imminent arrival: enemy about to hop (anim <= 16) and its
-        # next position would be our destination
-        if e.anim <= 16 and e.anim > 0:
+        # Imminent arrival: enemy within 1 hop of dest AND will hop soon.
+        # Use anim <= 20 (generous — includes enemies ~4 ticks from trigger)
+        d = grid_dist(e.pos[0], e.pos[1], dest[0], dest[1])
+        if d <= 1 and e.anim <= 20 and e.anim > 0:
             if e.etype == "coily":
                 next_pos = predict_coily(e.pos[0], e.pos[1],
                                          state.qbert_prev[0], state.qbert_prev[1])
