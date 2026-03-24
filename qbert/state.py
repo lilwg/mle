@@ -266,7 +266,9 @@ def read_state(data, tracker=None):
                 # Sam/Slick: harmless (fl=0x44, 0x46, 0x4A, etc.)
                 etype = "sam"
                 harmless = True
-        elif flags == 0x68 or is_coily or (going_up and flag_type == 0):
+        elif flags == 0x68 or is_coily:
+            # Only confirmed Coily: fl=0x68 definitive, or tracker confirmed
+            # Remove `going_up and flag_type == 0` — catches fl=0x20 balls
             etype = "coily"
             harmless = False
         else:
