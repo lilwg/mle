@@ -455,10 +455,12 @@ def execute_hop(env, action, tracker):
         # Cross-match
         if e.pos == qpos and e.prev_pos == dest:
             return None
-        # Imminent arrival: enemy within 1 hop of dest AND will hop soon.
-        # Use anim <= 20 (generous — includes enemies ~4 ticks from trigger)
+        # Imminent arrival: enemy within 1 hop of dest whose next
+        # position would be our destination. Enemy hop cycle is ~43 frames,
+        # Q*bert's vulnerability window is ~25 frames. Any enemy with
+        # anim <= 28 (ball reload) could arrive in time.
         d = grid_dist(e.pos[0], e.pos[1], dest[0], dest[1])
-        if d <= 1 and e.anim <= 20 and e.anim > 0:
+        if d <= 1 and e.anim > 0:
             if e.etype == "coily":
                 next_pos = predict_coily(e.pos[0], e.pos[1],
                                          state.qbert_prev[0], state.qbert_prev[1])
