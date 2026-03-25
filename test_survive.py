@@ -234,46 +234,33 @@ def score_sequence(state, actions, alive, target, coily_pos,
         d = grid_dist(final_pos[0], final_pos[1], target[0], target[1])
         score -= d * 120
 
-    # Position quality — scales with danger level
-    # When no enemies nearby, position quality matters less
-    # When enemies close, it matters a LOT
+    # Position quality — the frame sim already filters UNSAFE sequences,
+    # so this is a tiebreaker among safe sequences. Keep it moderate.
     pq = POS_QUALITY.get(final_pos, 0)
     if coily_pos:
         predicted_coily = predict_coily_along_path(coily_pos, positions)
         cd = grid_dist(final_pos[0], final_pos[1],
                        predicted_coily[0], predicted_coily[1])
-        # Stronger penalty when Coily is close
-        if cd <= 3:
-            score += pq * 6  # -1200 for dead-ends when Coily near
-        else:
-            score += pq * 2  # -400 for dead-ends when Coily far
-        score += cd * 200
+        # Scale position penalty with Coily proximity
+        pq_mult = 3 if cd <= 2 else 1
+        score += pq * pq_mult
+        score += cd * 150
     else:
-        # No Coily — position quality still matters but less
-        enemies_near = any(not e.harmless and is_valid(e.pos[0], e.pos[1])
-                          and grid_dist(final_pos[0], final_pos[1],
-                                        e.pos[0], e.pos[1]) <= 3
-                          for e in state.enemies)
-        if enemies_near:
-            score += pq * 4
-        else:
-            score += pq * 1  # minimal penalty when board is safe
+        score += pq  # minimal when no Coily
 
     # Disc proximity (pull toward disc when Coily is active)
     if disc_target and coily_pos:
         dd = grid_dist(final_pos[0], final_pos[1],
                        disc_target[0], disc_target[1])
-        # Urgency increases with stuck count
-        disc_weight = 100 + hops_stuck * 30
+        disc_weight = 80 + hops_stuck * 20
         score -= dd * disc_weight
 
-    # Oscillation penalty — penalize revisiting recent positions
+    # Oscillation penalty
     for pos in positions[1:]:
-        for i, rp in enumerate(_recent_positions):
-            if pos == rp:
-                recency = len(_recent_positions) - i
-                score -= recency * 25
-                break  # only penalize most recent visit
+        if pos in _recent_positions:
+            idx_r = _recent_positions.index(pos)
+            recency = len(_recent_positions) - idx_r
+            score -= recency * 20
 
     return score
 
@@ -468,11 +455,24 @@ def execute_hop(env, action, tracker):
         if not is_valid(epos[0], epos[1]):
             continue
         cy_raw = data.get(f"e{n}_coll_y", 0)
-        # Entity AT destination or AT current pos — block if cy=0 (about to land)
+        # Entity AT destination or AT current pos — block
         if epos == dest:
             return None
         if epos == qpos and cy_raw == 0:
             return None  # entity landing on us RIGHT NOW
+        # Ball/purple ball 1 row above destination heading down — will arrive
+        # during our hop. Check both possible ball landing positions.
+        if epos[0] == dest[0] - 1 and cy_raw == 0:
+            # In-flight ball about to land 1 row above, next hop goes to dest row
+            dbits = data.get(f"e{n}_dir", 0)
+            ball_next_l = (epos[0] + 1, epos[1])
+            ball_next_r = (epos[0] + 1, epos[1] + 1)
+            if ball_next_l == dest or ball_next_r == dest:
+                return None  # ball will hop to dest after landing
+        # Also check ball AT dest row but hasn't landed (cy=0, same row)
+        if epos[0] == dest[0] and cy_raw == 0:
+            if grid_dist(epos[0], epos[1], dest[0], dest[1]) <= 1:
+                return None  # nearby cy=0 entity on same row
         # Coily within 1 hop — predict chase
         if (fl & 0xE0) == 0x60 and grid_dist(epos[0], epos[1], dest[0], dest[1]) <= 1:
             pw0 = data.get(f"e{n}_pw0", 0)
@@ -567,7 +567,8 @@ def run():
 
     # Start game (randomize wait to vary MAME RNG seed)
     import random, time
-    env.wait(600 + int(time.time() * 1000) % 200)
+    import os
+    env.wait(600 + int.from_bytes(os.urandom(2)) % 200)
     env.step_n(*COIN_BUTTON, 15)
     env.wait(180)
     env.step_n(*START_BUTTON, 5)
