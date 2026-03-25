@@ -234,19 +234,23 @@ def score_sequence(state, actions, alive, target, coily_pos,
         d = grid_dist(final_pos[0], final_pos[1], target[0], target[1])
         score -= d * 120
 
-    # Position quality — the frame sim already filters UNSAFE sequences,
-    # so this is a tiebreaker among safe sequences. Keep it moderate.
-    pq = POS_QUALITY.get(final_pos, 0)
+    # Position quality at final position + worst bottleneck in path
+    pq_final = POS_QUALITY.get(final_pos, 0)
+    pq_worst = min(POS_QUALITY.get(p, 0) for p in positions[1:])
     if coily_pos:
         predicted_coily = predict_coily_along_path(coily_pos, positions)
         cd = grid_dist(final_pos[0], final_pos[1],
                        predicted_coily[0], predicted_coily[1])
-        # Scale position penalty with Coily proximity
         pq_mult = 3 if cd <= 2 else 1
-        score += pq * pq_mult
+        score += pq_final * pq_mult
+        # Penalize paths that pass through dead-end corners
+        if pq_worst <= -200:
+            score += pq_worst  # -200 penalty for traversing dead-end
         score += cd * 150
     else:
-        score += pq  # minimal when no Coily
+        score += pq_final
+        if pq_worst <= -200:
+            score += pq_worst
 
     # Disc proximity (pull toward disc when Coily is active)
     if disc_target and coily_pos:
