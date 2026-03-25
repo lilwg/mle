@@ -30,6 +30,166 @@ FRAME_SKIP = 4
 OBS_H, OBS_W = 84, 84
 STACK_SIZE = 4
 
+# ── OCR Score Reading ──────────────────────────────────────────────
+
+
+def ocr_score_from_frame(rgb_frame, region=None):
+    """Read score digits from a frame region using simple template matching.
+
+    Most arcade games display score as bright digits on dark background
+    in the top portion of the screen. We detect bright connected
+    components and count unique patterns as a proxy for score value.
+
+    Args:
+        rgb_frame: RGB numpy array (H, W, 3)
+        region: (y1, y2, x1, x2) crop region, or None for top strip
+
+    Returns:
+        int: estimated score value, or -1 if unreadable
+    """
+    gray = np.dot(rgb_frame[..., :3], [0.299, 0.587, 0.114])
+
+    # Default: top 15% of screen (where scores usually are)
+    h, w = gray.shape
+    if region is None:
+        y1, y2 = 0, max(1, h // 7)
+        x1, x2 = 0, w
+    else:
+        y1, y2, x1, x2 = region
+
+    crop = gray[y1:y2, x1:x2]
+    if crop.size == 0:
+        return -1
+
+    # Threshold: score digits are usually bright (> 128)
+    binary = (crop > 128).astype(np.uint8)
+
+    # Count bright pixels in columns — score digits create vertical clusters
+    col_sums = binary.sum(axis=0)
+    # Find digit-like columns (>20% of height is bright)
+    threshold = max(1, binary.shape[0] * 0.2)
+    digit_cols = col_sums > threshold
+
+    # Count transitions (gaps between digit groups)
+    transitions = np.diff(digit_cols.astype(int))
+    n_digits = max(0, np.sum(transitions == 1))
+
+    # Estimate score from digit count and brightness pattern
+    # This is a rough proxy — real OCR would use digit templates
+    if n_digits == 0:
+        return 0
+
+    # Hash the bright pixel pattern as a score proxy
+    # Different scores produce different column patterns
+    pattern = tuple(col_sums[digit_cols].tolist()[:20])
+    return hash(pattern) & 0x7FFFFFFF  # positive hash as score proxy
+
+
+def detect_score_region(frame1, frame2):
+    """Find the screen region where score changes between frames.
+
+    Compare two frames and find the region with the most change
+    in the top portion (where scores typically are).
+
+    Returns (y1, y2, x1, x2) or None.
+    """
+    if frame1 is None or frame2 is None:
+        return None
+    gray1 = np.dot(frame1[..., :3], [0.299, 0.587, 0.114])
+    gray2 = np.dot(frame2[..., :3], [0.299, 0.587, 0.114])
+    diff = np.abs(gray1 - gray2)
+
+    h, w = diff.shape
+    # Only look at top 25% of screen
+    top = diff[:h // 4, :]
+    if top.max() < 10:
+        return None
+
+    # Find bounding box of changes
+    changed = top > 20
+    rows = np.any(changed, axis=1)
+    cols = np.any(changed, axis=0)
+    if not rows.any() or not cols.any():
+        return None
+
+    y1 = np.argmax(rows)
+    y2 = len(rows) - np.argmax(rows[::-1])
+    x1 = np.argmax(cols)
+    x2 = len(cols) - np.argmax(cols[::-1])
+    return (int(y1), int(y2), int(x1), int(x2))
+
+
+# ── Bootstrap RAM Detection ───────────────────────────────────────
+
+
+class RAMTracker:
+    """Track RAM bytes during gameplay to find score/lives addresses.
+
+    Run alongside training: collect RAM snapshots correlated with
+    reward signals. After enough data, identify which RAM bytes
+    best correlate with episode reward.
+    """
+
+    def __init__(self, scan_range=range(0x0000, 0x1000)):
+        self.scan_range = scan_range
+        self.snapshots = []  # list of (ram_dict, reward, step)
+        self.max_snapshots = 500
+
+    def record(self, data, reward, step):
+        """Record a RAM snapshot with its associated reward."""
+        if len(self.snapshots) >= self.max_snapshots:
+            # Keep every other snapshot to make room
+            self.snapshots = self.snapshots[::2]
+        snap = {}
+        for addr in self.scan_range:
+            key = f"_r{addr:04x}"
+            if key in data:
+                snap[addr] = data[key]
+        if snap:
+            self.snapshots.append((snap, reward, step))
+
+    def analyze(self):
+        """Find RAM addresses that correlate with positive reward.
+
+        Returns (score_addrs, lives_addr) or ([], None).
+        """
+        if len(self.snapshots) < 50:
+            return [], None
+
+        score_candidates = []
+        lives_candidates = []
+
+        for addr in self.scan_range:
+            values = [s[0].get(addr, 0) for s in self.snapshots]
+            rewards = [s[1] for s in self.snapshots]
+
+            if all(v == values[0] for v in values):
+                continue
+
+            # Correlation: does this byte increase when reward is positive?
+            pos_reward_vals = [v for v, r in zip(values, rewards) if r > 0.5]
+            neg_reward_vals = [v for v, r in zip(values, rewards) if r < -0.5]
+
+            if pos_reward_vals and neg_reward_vals:
+                avg_pos = sum(pos_reward_vals) / len(pos_reward_vals)
+                avg_neg = sum(neg_reward_vals) / len(neg_reward_vals)
+                if avg_pos > avg_neg + 1:
+                    score_candidates.append((addr, avg_pos - avg_neg))
+
+            # Lives: decreases when big negative reward
+            changes = sum(1 for i in range(1, len(values)) if values[i] != values[i-1])
+            decreases = sum(1 for i in range(1, len(values))
+                           if values[i] < values[i-1])
+            first = values[0]
+            if 1 <= first <= 6 and decreases >= 1 and changes <= 10:
+                if neg_reward_vals:
+                    lives_candidates.append((addr, decreases, first))
+
+        score_addrs = [a for a, _ in sorted(score_candidates, key=lambda x: -x[1])[:4]]
+        lives_addr = lives_candidates[0][0] if lives_candidates else None
+
+        return score_addrs, lives_addr
+
 
 def discover_inputs(game_id):
     """Discover game inputs from MAME XML metadata."""
@@ -269,19 +429,27 @@ class MamePixelEnv(gym.Env):
     """General MAME pixel-based gymnasium environment."""
 
     def __init__(self, game_id, render=False, throttle=False,
-                 score_addrs=None, lives_addr=None):
+                 score_addrs=None, lives_addr=None, bootstrap=False):
         super().__init__()
         self.game_id = game_id
         self._render = render
         self._throttle = throttle
         self.env = None
         self._steps = 0
+        self._total_steps = 0
         self._frame_stack = None
         self._prev_frame = None
         self._score_addrs = score_addrs or []
         self._lives_addr = lives_addr
         self._prev_score = 0
         self._prev_lives = 0
+        self._prev_ocr_score = 0
+        self._score_region = None
+        self._ocr_calibrated = False
+        # Bootstrap: track RAM during survival-based training
+        self._bootstrap = bootstrap
+        self._ram_tracker = RAMTracker() if bootstrap else None
+        self._bootstrapped = False
 
         # Discover game controls
         ways, n_buttons = discover_inputs(game_id)
@@ -301,13 +469,17 @@ class MamePixelEnv(gym.Env):
         subprocess.run(["pkill", "-f", f"mame.*{self.game_id}"],
                        capture_output=True)
         time.sleep(0.5)
-        # Build RAM address dict — always include score/lives if detected
+        # Build RAM address dict
         ram = {"_dummy": 0x0000}
         if self._score_addrs:
             for i, addr in enumerate(self._score_addrs):
                 ram[f"_score{i}"] = addr
         if self._lives_addr:
             ram["_lives"] = self._lives_addr
+        # Bootstrap mode: also read full RAM range for correlation tracking
+        if self._bootstrap and not self._bootstrapped:
+            for addr in range(0x0000, 0x1000):
+                ram[f"_r{addr:04x}"] = addr
         self.env = MameEnv(
             ROMS_PATH, self.game_id, ram,
             render=self._render, sound=False, throttle=self._throttle,
@@ -403,6 +575,7 @@ class MamePixelEnv(gym.Env):
         self._prev_frame = processed.copy()
         self._steps = 0
         self._prev_score = 0
+        self._prev_ocr_score = 0
         # Read initial lives
         data = self.env.step()
         self._prev_lives = data.get("_lives", 0)
@@ -410,6 +583,7 @@ class MamePixelEnv(gym.Env):
 
     def step(self, action):
         self._steps += 1
+        self._total_steps += 1
         action = int(action)
 
         if action < len(self._actions):
@@ -433,42 +607,73 @@ class MamePixelEnv(gym.Env):
         else:
             processed = self._prev_frame
 
-        # Compute reward
+        # ── Compute reward (layered: RAM score > OCR > survival) ──
         reward = 0.0
         terminated = False
 
+        # Layer 1: RAM score (best signal, if addresses known)
         if self._score_addrs:
-            # Score-based reward (much better signal)
             score = sum(data.get(f"_score{i}", 0) << (8 * i)
                         for i in range(len(self._score_addrs)))
             delta = score - self._prev_score
             if delta > 0:
-                reward += min(delta / 100.0, 10.0)  # cap to avoid huge spikes
+                reward += min(delta / 100.0, 10.0)
             elif delta < -1000:
-                # Score wrapped or reset — likely new game
-                pass
+                pass  # score wrapped/reset
             self._prev_score = score
 
+        # Layer 1b: RAM lives (if address known)
         if self._lives_addr:
-            # Lives-based death detection
             lives = data.get("_lives", 0)
             if lives < self._prev_lives and self._prev_lives > 0:
-                reward -= 5.0  # death penalty
+                reward -= 5.0
             if lives == 0 and self._prev_lives > 0:
-                terminated = True  # game over
+                terminated = True
             self._prev_lives = lives
 
-        if not self._score_addrs:
-            # Fallback: pixel change heuristic
-            diff = np.mean(np.abs(
-                processed.astype(float) - self._prev_frame.astype(float)
-            ))
-            if diff > 30:
-                reward -= 1.0
-            elif diff > 3:
-                reward += 0.1
+        # Layer 2: OCR score from pixels (if no RAM score)
+        if not self._score_addrs and "frame" in data:
+            # Try to detect score region from frame changes
+            if not self._ocr_calibrated and self._prev_frame is not None:
+                region = detect_score_region(
+                    data["frame"],
+                    # reconstruct prev RGB from grayscale isn't possible,
+                    # so just use the score region detection on first big change
+                    None
+                )
+                if region:
+                    self._score_region = region
+                    self._ocr_calibrated = True
 
-        reward -= 0.01  # small step penalty
+            ocr_score = ocr_score_from_frame(data["frame"], self._score_region)
+            if ocr_score >= 0 and self._prev_ocr_score >= 0:
+                if ocr_score != self._prev_ocr_score:
+                    reward += 1.0  # score changed = good
+            self._prev_ocr_score = ocr_score
+
+        # Layer 3: Survival reward (always active as baseline)
+        # Staying alive = good. This is the universal fallback.
+        reward += 0.1  # survive bonus per step
+
+        # Bootstrap: track RAM correlation with reward
+        if self._ram_tracker and not self._bootstrapped:
+            self._ram_tracker.record(data, reward, self._total_steps)
+            # After 10K steps, analyze and switch to RAM-based reward
+            if self._total_steps > 0 and self._total_steps % 10000 == 0:
+                new_score, new_lives = self._ram_tracker.analyze()
+                if new_score:
+                    print(f"[bootstrap] Detected score addresses: "
+                          f"{[f'${a:04X}' for a in new_score]}")
+                    self._score_addrs = new_score
+                    self._bootstrapped = True
+                if new_lives and not self._lives_addr:
+                    print(f"[bootstrap] Detected lives address: ${new_lives:04X}")
+                    self._lives_addr = new_lives
+                    self._bootstrapped = True
+                if self._bootstrapped:
+                    print("[bootstrap] Switching to RAM-based reward!")
+                    # Restart MAME with new RAM addresses
+                    self._start_mame()
 
         self._prev_frame = processed.copy()
         self._frame_stack = np.roll(self._frame_stack, -1, axis=0)
@@ -522,9 +727,11 @@ def load_model(model_name, path):
     return cls.load(path)
 
 
-def train(game_id, model_name, timesteps, save_path, score_addrs=None, lives_addr=None):
+def train(game_id, model_name, timesteps, save_path,
+          score_addrs=None, lives_addr=None, bootstrap=False):
     env = MamePixelEnv(game_id, render=False, throttle=False,
-                       score_addrs=score_addrs, lives_addr=lives_addr)
+                       score_addrs=score_addrs, lives_addr=lives_addr,
+                       bootstrap=bootstrap)
     model = make_model(model_name, env)
     reward_src = "score RAM" if score_addrs else "pixel heuristic"
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
@@ -563,6 +770,8 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--detect-score", action="store_true",
                         help="Auto-detect score/lives RAM before training")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="Learn survival first, auto-detect RAM during play")
     parser.add_argument("--score-addr", type=str, default=None,
                         help="Manual score RAM address(es), comma-separated hex (e.g. 0x00BE)")
     parser.add_argument("--lives-addr", type=str, default=None,
@@ -604,4 +813,4 @@ if __name__ == "__main__":
                  score_addrs, lives_addr)
     else:
         train(args.game, args.model, args.timesteps, save_path,
-              score_addrs, lives_addr)
+              score_addrs, lives_addr, bootstrap=args.bootstrap)
