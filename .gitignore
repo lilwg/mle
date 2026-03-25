@@ -9,3 +9,4 @@ build/
 demo_output/
 nvram/
 ini/
+*.png
