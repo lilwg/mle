@@ -147,6 +147,8 @@ def main():
                         help="Number of score samples to collect")
     parser.add_argument("--headless", action="store_true",
                         help="Run unthrottled (fast, small window)")
+    parser.add_argument("--human", action="store_true",
+                        help="You play, script watches and scans RAM")
     args = parser.parse_args()
 
     # Build RAM dict to read full range
@@ -197,24 +199,32 @@ def main():
     # Collect samples: play, screenshot, OCR, scan RAM
     import random
     samples = []  # list of (ocr_numbers_list, ram_snapshot)
+    human = getattr(args, 'human', False)
+
+    if human:
+        print(">>> YOU PLAY the game. Press Enter here to capture each sample.")
+        print(f">>> Need {args.samples} samples with different scores.\n")
 
     for sample_idx in range(args.samples):
-        # Play randomly for a bit
-        n_play = 300 + sample_idx * 150
-        for i in range(n_play):
-            if actions and random.random() < 0.7:
-                port, field = random.choice(actions)
-                env.step(port, field)
-            else:
-                env.step()
+        if human:
+            input(f"  [Sample {sample_idx + 1}/{args.samples}] Press Enter to capture...")
+        else:
+            # Play randomly for a bit
+            n_play = 300 + sample_idx * 150
+            for i in range(n_play):
+                if actions and random.random() < 0.7:
+                    port, field = random.choice(actions)
+                    env.step(port, field)
+                else:
+                    env.step()
 
-        # Re-coin if needed (game over from random play)
-        if coin:
-            env.step_n(*coin, 15)
-            env.wait(30)
-        if start:
-            env.step_n(*start, 5)
-            env.wait(30)
+            # Re-coin if needed (game over from random play)
+            if coin:
+                env.step_n(*coin, 15)
+                env.wait(30)
+            if start:
+                env.step_n(*start, 5)
+                env.wait(30)
 
         # Grab frame + RAM
         env.request_frame()
