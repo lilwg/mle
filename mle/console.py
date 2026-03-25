@@ -134,12 +134,15 @@ class MameConsole:
         # Build command as string (shell=True, same as working MAMEToolkit)
         roms_abs = str(Path(roms_path).absolute())
         cmd = f"exec {self.binary} -rompath '{roms_abs}'"
-        cmd += " -skip_gameinfo -window -nomaximize -console"
+        cmd += " -skip_gameinfo -console"
+        if render:
+            cmd += " -window -nomaximize"
+        else:
+            cmd += " -window -nomaximize -video none"
+            cmd += " -resolution 1x1"  # minimize window footprint
         if self.data_dir:
             cmd += f" -pluginspath '{os.path.join(self.data_dir, 'plugins')}'"
             cmd += f" -hashpath '{os.path.join(self.data_dir, 'hash')}'"
-        if not render:
-            cmd += " -video none"
         if not sound:
             cmd += " -sound none"
         cmd += " -throttle" if throttle else " -nothrottle"
