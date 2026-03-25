@@ -278,7 +278,7 @@ class QbertEnv(gym.Env):
         coily_d = 12.0
         for e in s.enemies:
             if e.etype == "coily" and not e.harmless and is_valid(e.pos[0], e.pos[1]):
-                from test_survive import grid_dist
+                from qbert_bot import grid_dist
                 d = grid_dist(s.qbert[0], s.qbert[1], e.pos[0], e.pos[1])
                 coily_d = min(coily_d, d)
                 break
