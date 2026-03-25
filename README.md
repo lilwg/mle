@@ -34,10 +34,10 @@ python3 eval_ppo.py qbert_ppo_500k --no-render    # Headless stats
 
 Uses 78-dimensional structured state from RAM (Q*bert position, 28 cube states, 10 enemy slots, disc availability). MLP policy trains 10-100x faster than pixels.
 
-### Run the handcrafted Q*bert agent
+### Run the handcrafted Q*bert bot
 
 ```bash
-python3 test_survive.py
+python3 qbert_bot.py
 ```
 
 ROM-accurate frame simulation, depth-6 lookahead with unified scoring. Completes 3+ levels.
@@ -61,7 +61,7 @@ mle/
 ├── qbert_gym.py      # Q*bert Gymnasium wrapper (structured state)
 ├── train_ppo.py      # PPO training script for Q*bert
 ├── eval_ppo.py       # Evaluation script
-└── test_survive.py   # Handcrafted Q*bert agent
+└── qbert_bot.py      # Handcrafted Q*bert bot
 ```
 
 ## How MameEnv Works
