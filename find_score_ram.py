@@ -1,0 +1,282 @@
+"""Auto-find score/lives RAM addresses using OCR + RAM scanning.
+
+Strategy:
+1. Play the game, grab screenshots at intervals
+2. OCR the score from each screenshot
+3. Scan all RAM for byte patterns that match the OCR'd score
+4. Intersect candidates across multiple samples → find the address
+
+Usage:
+    python3 find_score_ram.py qbert
+    python3 find_score_ram.py galaga
+    python3 find_score_ram.py dkong
+"""
+
+import sys
+import os
+import re
+import time
+import argparse
+import numpy as np
+from PIL import Image
+import pytesseract
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mle import MameEnv
+
+ROMS_PATH = "/Users/pat/mame/roms"
+SCAN_RANGE = range(0x0000, 0x2000)  # 8KB covers most arcade games
+
+
+def ocr_score(rgb_frame):
+    """OCR digits from the top portion of a game screen.
+
+    Returns list of (value_str, region) for each number found.
+    """
+    img = Image.fromarray(rgb_frame)
+    w, h = img.size
+
+    # Arcade scores are usually in the top 20% of screen
+    # Try multiple horizontal strips
+    results = []
+    for y_frac in [0.0, 0.05]:
+        y1 = int(h * y_frac)
+        y2 = int(h * (y_frac + 0.15))
+        crop = img.crop((0, y1, w, y2))
+
+        # Scale up 3x for better OCR on small arcade fonts
+        crop = crop.resize((crop.width * 3, crop.height * 3), Image.NEAREST)
+
+        # OCR with digit-only whitelist
+        text = pytesseract.image_to_string(
+            crop,
+            config='--psm 6 -c tessedit_char_whitelist=0123456789'
+        ).strip()
+
+        # Extract all number sequences
+        for match in re.finditer(r'\d{2,}', text):
+            results.append(match.group())
+
+    return results
+
+
+def find_matching_ram(ram_snapshot, target_value):
+    """Find RAM addresses where the value matches target_value.
+
+    Tries multiple encodings:
+    - Single byte (raw)
+    - BCD single byte
+    - Multi-byte BCD (2-4 adjacent bytes)
+    - Little-endian 16-bit
+    - Big-endian 16-bit
+    """
+    matches = {}  # addr -> encoding_description
+
+    for addr in SCAN_RANGE:
+        val = ram_snapshot.get(addr, 0)
+
+        # Single byte raw
+        if val == target_value and target_value <= 255:
+            matches[addr] = f"raw byte ({val})"
+
+        # Single byte BCD: e.g. 0x25 = 25
+        bcd_val = ((val >> 4) & 0xF) * 10 + (val & 0xF)
+        if (val >> 4) <= 9 and (val & 0xF) <= 9:
+            if bcd_val == target_value and target_value <= 99:
+                matches[addr] = f"BCD byte ({val:#04x}={bcd_val})"
+
+    # Multi-byte BCD: adjacent bytes form the full score
+    # e.g. score 12350 = bytes 0x01 0x23 0x50 (high to low)
+    # or bytes 0x50 0x23 0x01 (low to high)
+    target_str = str(target_value)
+    if len(target_str) >= 2:
+        # Pad to even length
+        if len(target_str) % 2:
+            target_str = "0" + target_str
+        n_bytes = len(target_str) // 2
+        # Build expected BCD bytes
+        bcd_bytes_hi_first = []
+        for i in range(0, len(target_str), 2):
+            hi = int(target_str[i])
+            lo = int(target_str[i + 1])
+            bcd_bytes_hi_first.append((hi << 4) | lo)
+        bcd_bytes_lo_first = list(reversed(bcd_bytes_hi_first))
+
+        for start_addr in SCAN_RANGE:
+            if start_addr + n_bytes > max(SCAN_RANGE):
+                break
+            actual = [ram_snapshot.get(start_addr + i, -1) for i in range(n_bytes)]
+
+            if actual == bcd_bytes_hi_first:
+                addrs = [start_addr + i for i in range(n_bytes)]
+                matches[start_addr] = f"BCD {n_bytes}B hi-first {[f'${a:04X}' for a in addrs]}"
+
+            if actual == bcd_bytes_lo_first:
+                addrs = [start_addr + i for i in range(n_bytes)]
+                matches[start_addr] = f"BCD {n_bytes}B lo-first {[f'${a:04X}' for a in addrs]}"
+
+    # 16-bit little-endian
+    if target_value <= 0xFFFF:
+        lo = target_value & 0xFF
+        hi = (target_value >> 8) & 0xFF
+        for addr in SCAN_RANGE:
+            if addr + 1 > max(SCAN_RANGE):
+                break
+            if ram_snapshot.get(addr, -1) == lo and ram_snapshot.get(addr + 1, -1) == hi:
+                matches[addr] = f"16-bit LE (${addr:04X}={lo:#04x}, ${addr+1:04X}={hi:#04x})"
+
+    return matches
+
+
+def read_full_ram(env):
+    """Read all bytes in SCAN_RANGE from current MAME state."""
+    # We already have them in the data dict from step()
+    data = env.step()
+    ram = {}
+    for addr in SCAN_RANGE:
+        key = f"_r{addr:04x}"
+        if key in data:
+            ram[addr] = data[key]
+    return ram, data
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Find score RAM addresses via OCR")
+    parser.add_argument("game", help="MAME ROM name")
+    parser.add_argument("--samples", type=int, default=5,
+                        help="Number of score samples to collect")
+    args = parser.parse_args()
+
+    # Build RAM dict to read full range
+    ram_dict = {f"_r{addr:04x}": addr for addr in SCAN_RANGE}
+
+    print(f"[{args.game}] Starting MAME...")
+    env = MameEnv(ROMS_PATH, args.game, ram_dict,
+                  render=True, sound=False, throttle=True)
+
+    # Discover inputs
+    result = env.console.writeln_expect(
+        'local r = {}; '
+        'for pname, port in pairs(manager.machine.ioport.ports) do '
+        'for fname, field in pairs(port.fields) do '
+        'r[#r+1] = pname.."|"..fname; '
+        'end; end; '
+        'print(table.concat(r, ";"))'
+    )
+    coin, start, actions = None, None, []
+    if result:
+        for pair in result.split(";"):
+            if "|" not in pair:
+                continue
+            port, field = pair.split("|", 1)
+            fl = field.lower()
+            if "coin" in fl:
+                coin = (port, field)
+            elif "1 player" in fl or ("start" in fl and "1" in fl):
+                start = (port, field)
+            elif "p1" in fl and any(d in fl for d in ["up", "down", "left", "right", "button"]):
+                actions.append((port, field))
+
+    # Insert coin + start
+    if coin:
+        env.step_n(*coin, 15)
+    env.wait(120)
+    if start:
+        env.step_n(*start, 5)
+    env.wait(300)
+
+    print(f"[{args.game}] Game started. Playing randomly to generate score...")
+    print(f"  Actions: {[f[1] for f in actions]}")
+    print()
+
+    # Collect samples: play, screenshot, OCR, scan RAM
+    import random
+    all_candidates = []  # list of sets of (addr, encoding)
+
+    for sample_idx in range(args.samples):
+        # Play randomly for a bit
+        n_play = 200 + sample_idx * 100
+        for i in range(n_play):
+            if actions and random.random() < 0.7:
+                port, field = random.choice(actions)
+                env.step(port, field)
+            else:
+                env.step()
+
+        # Grab frame + RAM
+        env.request_frame()
+        data = env.step()
+        ram = {addr: data.get(f"_r{addr:04x}", 0) for addr in SCAN_RANGE}
+
+        if "frame" not in data:
+            print(f"  Sample {sample_idx + 1}: no frame data")
+            continue
+
+        frame = data["frame"]
+        # Save screenshot for debugging
+        img = Image.fromarray(frame)
+        img.save(f"/tmp/{args.game}_sample{sample_idx}.png")
+
+        # OCR the score
+        scores = ocr_score(frame)
+        if not scores:
+            print(f"  Sample {sample_idx + 1}: OCR found no numbers")
+            continue
+
+        print(f"  Sample {sample_idx + 1}: OCR found {scores}")
+
+        # For each OCR'd number, find matching RAM addresses
+        sample_matches = set()
+        for score_str in scores:
+            score_val = int(score_str)
+            matches = find_matching_ram(ram, score_val)
+            for addr, encoding in matches.items():
+                sample_matches.add((addr, encoding))
+
+        if sample_matches:
+            all_candidates.append(sample_matches)
+            print(f"    {len(sample_matches)} RAM candidates")
+        else:
+            print(f"    No RAM matches for OCR values {scores}")
+
+    env.close()
+
+    # Intersect candidates across samples — addresses that match EVERY time
+    if not all_candidates:
+        print("\nNo candidates found. The game may need manual address identification.")
+        return
+
+    # Find addresses that appear in ALL samples
+    common_addrs = set(c[0] for c in all_candidates[0])
+    for candidates in all_candidates[1:]:
+        sample_addrs = set(c[0] for c in candidates)
+        common_addrs &= sample_addrs
+
+    if common_addrs:
+        print(f"\n{'='*60}")
+        print(f"Addresses matching all {len(all_candidates)} samples:")
+        print(f"{'='*60}")
+        # Get encoding info from last sample
+        last_matches = {addr: enc for addr, enc in all_candidates[-1]}
+        for addr in sorted(common_addrs):
+            enc = last_matches.get(addr, "?")
+            print(f"  ${addr:04X}: {enc}")
+
+        # Suggest config
+        addrs_hex = [f'"0x{a:04X}"' for a in sorted(common_addrs)[:4]]
+        print(f"\nSuggested game_configs.json entry:")
+        print(f'  "{args.game}": {{')
+        print(f'    "score_addrs": [{", ".join(addrs_hex)}],')
+        print(f'    "lives_addr": "TODO"')
+        print(f'  }}')
+    else:
+        print(f"\nNo addresses consistent across all samples.")
+        print("Showing candidates from individual samples:")
+        for i, candidates in enumerate(all_candidates):
+            print(f"\n  Sample {i + 1}:")
+            for addr, enc in sorted(candidates)[:10]:
+                print(f"    ${addr:04X}: {enc}")
+
+
+if __name__ == "__main__":
+    main()
