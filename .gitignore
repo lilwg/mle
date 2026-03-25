@@ -10,3 +10,6 @@ demo_output/
 nvram/
 ini/
 *.png
+*.hex
+*.bin
+*.zip
