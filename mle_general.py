@@ -554,6 +554,24 @@ if __name__ == "__main__":
     if args.lives_addr:
         lives_addr = int(args.lives_addr, 16)
         print(f"Using manual lives address: ${lives_addr:04X}")
+
+    # Check known game configs
+    if not score_addrs:
+        import json
+        config_path = os.path.join(os.path.dirname(__file__), "game_configs.json")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                configs = json.load(f)
+            if args.game in configs:
+                cfg = configs[args.game]
+                score_addrs = [int(a, 16) for a in cfg.get("score_addrs", [])]
+                if not lives_addr and "lives_addr" in cfg:
+                    lives_addr = int(cfg["lives_addr"], 16)
+                print(f"[{args.game}] Loaded known config: "
+                      f"score={[f'${a:04X}' for a in score_addrs]}, "
+                      f"lives=${lives_addr:04X}" if lives_addr else "")
+
+    # Auto-detect as last resort
     if args.detect_score and not score_addrs:
         score_addrs, lives_addr = detect_score_ram(args.game)
 

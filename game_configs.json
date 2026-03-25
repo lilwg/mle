@@ -1,0 +1,27 @@
+{
+    "qbert": {
+        "score_addrs": ["0x00BE"],
+        "lives_addr": "0x0D00",
+        "notes": "Score is single byte at $00BE. Lives at $0D00."
+    },
+    "pacman": {
+        "score_addrs": ["0x4E80", "0x4E81", "0x4E82"],
+        "lives_addr": "0x4E14",
+        "notes": "3-byte BCD score. Lives at $4E14."
+    },
+    "dkong": {
+        "score_addrs": ["0x6007", "0x6008", "0x6009"],
+        "lives_addr": "0x6001",
+        "notes": "3-byte BCD score. Lives at $6001."
+    },
+    "galaga": {
+        "score_addrs": ["0x83F3", "0x83F4", "0x83F5"],
+        "lives_addr": "0x9820",
+        "notes": "3-byte BCD score. Lives at $9820."
+    },
+    "frogger": {
+        "score_addrs": ["0x83EC", "0x83ED"],
+        "lives_addr": "0x83E8",
+        "notes": "2-byte BCD score. Lives at $83E8."
+    }
+}
