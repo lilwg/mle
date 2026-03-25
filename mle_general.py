@@ -75,33 +75,45 @@ DIRECTION_BUTTONS = {
     ],
 }
 
-# Common alternate port names (MAME varies per driver)
+# Common port/field names across MAME drivers (tried in order)
 ALT_DIRECTIONS = [
-    # Q*bert style
+    # Q*bert diagonal style (:IN4)
     [(":IN4", "P1 Up (Up-Right)"), (":IN4", "P1 Down (Down-Left)"),
      (":IN4", "P1 Left (Up-Left)"), (":IN4", "P1 Right (Down-Right)")],
-    # Standard :IN0
+    # Standard 4-way on various ports
     [(":IN0", "P1 Up"), (":IN0", "P1 Down"),
      (":IN0", "P1 Left"), (":IN0", "P1 Right")],
-    # Standard :IN1
     [(":IN1", "P1 Up"), (":IN1", "P1 Down"),
      (":IN1", "P1 Left"), (":IN1", "P1 Right")],
+    [(":IN4", "P1 Up"), (":IN4", "P1 Down"),
+     (":IN4", "P1 Left"), (":IN4", "P1 Right")],
+    # 2-way (left/right only)
+    [(":IN0", "P1 Left"), (":IN0", "P1 Right")],
+    [(":IN1", "P1 Left"), (":IN1", "P1 Right")],
+    # Joystick variants
+    [(":IN0", "P1 Joystick Up"), (":IN0", "P1 Joystick Down"),
+     (":IN0", "P1 Joystick Left"), (":IN0", "P1 Joystick Right")],
+    [(":IN1", "P1 Joystick Up"), (":IN1", "P1 Joystick Down"),
+     (":IN1", "P1 Joystick Left"), (":IN1", "P1 Joystick Right")],
 ]
 
 BUTTON_NAMES = [
-    (":IN4", "P1 Button 1"), (":IN0", "P1 Button 1"),
-    (":IN1", "P1 Button 1"), (":IN2", "P1 Button 1"),
+    (":IN0", "P1 Button 1"), (":IN1", "P1 Button 1"),
+    (":IN2", "P1 Button 1"), (":IN4", "P1 Button 1"),
+    (":IN0", "P1 Button1"), (":IN1", "P1 Button1"),
 ]
 
 COIN_BUTTONS = [
-    (":IN5", "Coin 1"), (":IN0", "Coin 1"), (":IN1", "Coin 1"),
-    (":IN6", "Coin 1"), (":IN7", "Coin 1"),
+    (":IN0", "Coin 1"), (":IN1", "Coin 1"),
+    (":IN5", "Coin 1"), (":IN6", "Coin 1"), (":IN7", "Coin 1"),
+    (":IN0", "Coin"), (":IN1", "Coin"),
 ]
 
 START_BUTTONS = [
-    (":IN5", "1 Player Start"), (":IN0", "1 Player Start"),
-    (":IN1", "1 Player Start"), (":IN4", "1 Player Start"),
+    (":IN1", "1 Player Start"), (":IN0", "1 Player Start"),
+    (":IN4", "1 Player Start"), (":IN5", "1 Player Start"),
     (":IN6", "1 Player Start"),
+    (":IN1", "Start 1"), (":IN0", "Start 1"),
 ]
 
 
@@ -293,47 +305,48 @@ class MamePixelEnv(gym.Env):
         self._discover_working_buttons()
 
     def _discover_working_buttons(self):
-        """Try different port/field combos to find ones that work."""
-        # For coin/start, try each until one doesn't error
+        """Discover game inputs by querying MAME's Lua ioport at runtime."""
+        # Query all port:field pairs via Lua console
+        result = self.env.console.writeln_expect(
+            'local r = {}; '
+            'for pname, port in pairs(manager.machine.ioport.ports) do '
+            'for fname, field in pairs(port.fields) do '
+            'r[#r+1] = pname.."|"..fname; '
+            'end; end; '
+            'print(table.concat(r, ";"))'
+        )
+
         self._coin = None
         self._start = None
-        for port, field in COIN_BUTTONS:
-            try:
-                self.env.step(port, field)
-                self._coin = (port, field)
-                break
-            except Exception:
-                continue
-        for port, field in START_BUTTONS:
-            try:
-                self.env.step(port, field)
-                self._start = (port, field)
-                break
-            except Exception:
-                continue
-
-        # For directions, try each variant set
         self._actions = []
         self._action_names = []
-        for variant in self._direction_variants:
-            try:
-                for port, field in variant:
-                    self.env.step(port, field)
-                # All worked — use this variant
-                self._actions = list(variant)
-                self._action_names = [f[1] for f in variant]
-                break
-            except Exception:
-                continue
 
-        # Add buttons
-        for port, field in BUTTON_NAMES[:self._n_buttons]:
-            try:
-                self.env.step(port, field)
-                self._actions.append((port, field))
-                self._action_names.append(field)
-            except Exception:
-                continue
+        if result:
+            for pair in result.split(";"):
+                if "|" not in pair:
+                    continue
+                port, field = pair.split("|", 1)
+                fl = field.lower()
+
+                # Player 1 directions
+                if "p1" in fl and any(d in fl for d in ["up", "down", "left", "right"]):
+                    self._actions.append((port, field))
+                    self._action_names.append(field)
+                # Player 1 joystick
+                elif "p1" in fl and "joystick" in fl:
+                    self._actions.append((port, field))
+                    self._action_names.append(field)
+                # Player 1 buttons
+                elif "p1" in fl and "button" in fl:
+                    self._actions.append((port, field))
+                    self._action_names.append(field)
+                # Coin
+                elif "coin" in fl and ("1" in field or self._coin is None):
+                    self._coin = (port, field)
+                # Start
+                elif ("1 player" in fl or "start 1" in fl
+                      or ("start" in fl and "1" in fl)):
+                    self._start = (port, field)
 
         self.action_space = spaces.Discrete(len(self._actions) + 1)  # +1 NOOP
         print(f"[{self.game_id}] Actions: {self._action_names} + NOOP")
