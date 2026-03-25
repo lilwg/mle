@@ -191,55 +191,66 @@ def detect_score_ram(game_id, n_frames=600):
     for addr in scan_range:
         key = f"_r{addr:04x}"
         values = [s.get(key, 0) for s in snapshots]
+        if all(v == values[0] for v in values):
+            continue  # static — skip
 
         changes = sum(1 for i in range(1, len(values)) if values[i] != values[i-1])
         increases = sum(1 for i in range(1, len(values)) if values[i] > values[i-1])
         decreases = sum(1 for i in range(1, len(values)) if values[i] < values[i-1])
         first = values[0]
         final = values[-1]
+        unique = len(set(values))
 
-        # Score heuristic for BCD bytes:
-        # - All values 0x00-0x99 (BCD valid)
-        # - Changes happen (not static)
-        # - More increases than decreases (score goes up)
-        # - Decreases can happen due to BCD carry (e.g. 0x99 → 0x00)
-        bcd_valid = all(v <= 0x99 and (v & 0x0F) <= 9 and (v >> 4) <= 9 for v in values)
-        if bcd_valid and changes >= 2 and increases >= 2:
-            score_candidates.append((addr, increases, changes, final))
+        # Score heuristic — relaxed criteria:
+        # 1. Changes at least twice
+        # 2. More increases than decreases (score goes up mostly)
+        # 3. Not a timer/counter that oscillates (unique values > 3)
+        # 4. Doesn't look like a position (stays in small range) unless it grows
+        if changes >= 2 and increases > decreases and unique >= 3:
+            # Prefer bytes that end higher than they start
+            growth = final - first if final > first else 0
+            score_candidates.append((addr, increases, growth, changes, unique))
 
-        # Lives: value 1-6 initially, never increases, decreases sometimes
-        if 1 <= first <= 6 and all(0 <= v <= 6 for v in values):
-            if decreases >= 1 and increases == 0:
+        # Lives heuristic — relaxed:
+        # Starts 1-6, decreases at least once, values always 0-9
+        if 1 <= first <= 6 and all(0 <= v <= 9 for v in values):
+            if decreases >= 1 and increases <= 1:
                 lives_candidates.append((addr, first, final, decreases))
 
-    # Find clusters of adjacent BCD score bytes (multi-digit scores)
-    score_candidates.sort(key=lambda x: x[0])  # sort by address
+    # Strategy 1: Find clusters of adjacent score bytes (BCD multi-digit)
+    score_candidates.sort(key=lambda x: x[0])
     best_cluster = []
     current_cluster = []
-    for addr, inc, chg, final in score_candidates:
+    for entry in score_candidates:
+        addr = entry[0]
         if current_cluster and addr == current_cluster[-1][0] + 1:
-            current_cluster.append((addr, inc, chg, final))
+            current_cluster.append(entry)
         else:
             if len(current_cluster) > len(best_cluster):
                 best_cluster = current_cluster
-            current_cluster = [(addr, inc, chg, final)]
+            current_cluster = [entry]
     if len(current_cluster) > len(best_cluster):
         best_cluster = current_cluster
 
-    # If no cluster found, pick the single best candidate
-    if best_cluster:
-        score_addrs = [addr for addr, _, _, _ in best_cluster]
-    elif score_candidates:
-        # Fallback: top candidates by increase count
-        score_candidates.sort(key=lambda x: -x[1])
-        score_addrs = [score_candidates[0][0]]
+    # Strategy 2: If no cluster, pick single best by growth
+    if len(best_cluster) >= 2:
+        score_addrs = [e[0] for e in best_cluster]
     else:
-        score_addrs = []
+        # Sort by growth * increases (best overall score indicator)
+        score_candidates.sort(key=lambda x: -(x[2] * x[1]))
+        if score_candidates:
+            score_addrs = [score_candidates[0][0]]
+        else:
+            score_addrs = []
 
     # Pick best lives candidate
     lives_addr = None
     if lives_candidates:
-        lives_candidates.sort(key=lambda x: -x[3])
+        # Prefer ones that start at common life counts (3, 5)
+        lives_candidates.sort(key=lambda x: (
+            -(x[3]),                    # most decreases
+            -int(x[1] in (3, 5)),       # common starting lives
+        ))
         lives_addr = lives_candidates[0][0]
 
     if score_addrs:
