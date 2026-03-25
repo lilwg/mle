@@ -23,14 +23,22 @@ def main():
         obs, _ = env.reset()
         total_reward = 0
         steps = 0
+        prev_cubes = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
+            # Print progress every 100 steps
+            if steps % 100 == 0:
+                s = env.state
+                cubes = sum(1 for i in range(28) if s.cube_states[i] == s.target_color)
+                print(f"  step {steps}: cubes={cubes}/28 lives={s.lives} level={env.current_level} reward={total_reward:.0f}")
             if terminated or truncated:
                 break
-        print(f"Episode {ep+1}: reward={total_reward:.1f}, steps={steps}")
+        s = env.state
+        cubes = sum(1 for i in range(28) if s.cube_states[i] == s.target_color)
+        print(f"Episode {ep+1}: reward={total_reward:.1f}, steps={steps}, level={env.current_level}, cubes={cubes}")
 
     env.close()
 

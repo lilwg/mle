@@ -1,13 +1,14 @@
 """General-purpose MAME RL agent. Works with any arcade game ROM.
 
 Usage:
-    python3 mle_general.py pacman          # Train on Pac-Man
-    python3 mle_general.py qbert           # Train on Q*bert
-    python3 mle_general.py galaga          # Train on Galaga
-    python3 mle_general.py dkong --eval model.zip  # Evaluate saved model
+    python3 mle_general.py pacman                        # Train on Pac-Man
+    python3 mle_general.py qbert --model dqn             # Train with DQN
+    python3 mle_general.py galaga --model a2c             # Train with A2C
+    python3 mle_general.py dkong --eval model.zip        # Evaluate saved model
+    python3 mle_general.py qbert --detect-score          # Auto-detect score RAM
 
-No game-specific code. Uses pixels for observations and auto-detects
-inputs via MAME XML metadata.
+No game-specific code. Uses pixels for observations, auto-detects
+inputs via MAME XML metadata, and can auto-detect score RAM addresses.
 """
 
 import sys
@@ -104,10 +105,148 @@ START_BUTTONS = [
 ]
 
 
+def detect_score_ram(game_id, n_frames=600):
+    """Auto-detect score and lives RAM addresses by watching what changes.
+
+    Strategy:
+    1. Start the game and play randomly for n_frames
+    2. Read ALL of RAM each frame (scan a range)
+    3. Score bytes: increment monotonically, change when game is active
+    4. Lives bytes: start > 0, decrement on death (value 1-5 range)
+
+    Returns (score_addrs, lives_addr) or ([], None) if not found.
+    """
+    print(f"[{game_id}] Scanning RAM for score/lives addresses...")
+
+    # Read a broad RAM range — most arcade games keep state in $0000-$1FFF
+    scan_range = range(0x0000, 0x1000)
+    ram_dict = {f"_r{addr:04x}": addr for addr in scan_range}
+    ram_dict["_dummy"] = 0x0000  # ensure non-empty
+
+    env = MameEnv(ROMS_PATH, game_id, ram_dict,
+                  render=False, sound=False, throttle=False)
+
+    # Skip attract mode, insert coin, start
+    env.wait(300)
+    # Try common coin/start buttons
+    for port, field in COIN_BUTTONS:
+        try:
+            env.step_n(port, field, 15)
+            break
+        except Exception:
+            continue
+    env.wait(60)
+    for port, field in START_BUTTONS:
+        try:
+            env.step_n(port, field, 5)
+            break
+        except Exception:
+            continue
+    env.wait(120)
+
+    # Collect RAM snapshots while playing randomly
+    snapshots = []
+    all_dirs = ALT_DIRECTIONS + [DIRECTION_BUTTONS.get(4, [])]
+    working_dirs = None
+    for variant in all_dirs:
+        try:
+            for port, field in variant:
+                env.step(port, field)
+            working_dirs = variant
+            break
+        except Exception:
+            continue
+
+    for frame in range(n_frames):
+        if working_dirs and frame % 8 < 6:
+            port, field = working_dirs[frame // 8 % len(working_dirs)]
+            data = env.step(port, field)
+        else:
+            data = env.step()
+        if frame % 10 == 0:
+            snapshots.append({k: v for k, v in data.items() if k.startswith("_r")})
+
+    env.close()
+
+    if len(snapshots) < 10:
+        print("  Not enough data collected")
+        return [], None
+
+    # Analyze each byte's behavior over time
+    score_candidates = []
+    lives_candidates = []
+
+    for addr in scan_range:
+        key = f"_r{addr:04x}"
+        values = [s.get(key, 0) for s in snapshots]
+
+        changes = sum(1 for i in range(1, len(values)) if values[i] != values[i-1])
+        increases = sum(1 for i in range(1, len(values)) if values[i] > values[i-1])
+        decreases = sum(1 for i in range(1, len(values)) if values[i] < values[i-1])
+        first = values[0]
+        final = values[-1]
+
+        # Score heuristic for BCD bytes:
+        # - All values 0x00-0x99 (BCD valid)
+        # - Changes happen (not static)
+        # - More increases than decreases (score goes up)
+        # - Decreases can happen due to BCD carry (e.g. 0x99 → 0x00)
+        bcd_valid = all(v <= 0x99 and (v & 0x0F) <= 9 and (v >> 4) <= 9 for v in values)
+        if bcd_valid and changes >= 2 and increases >= 2:
+            score_candidates.append((addr, increases, changes, final))
+
+        # Lives: value 1-6 initially, never increases, decreases sometimes
+        if 1 <= first <= 6 and all(0 <= v <= 6 for v in values):
+            if decreases >= 1 and increases == 0:
+                lives_candidates.append((addr, first, final, decreases))
+
+    # Find clusters of adjacent BCD score bytes (multi-digit scores)
+    score_candidates.sort(key=lambda x: x[0])  # sort by address
+    best_cluster = []
+    current_cluster = []
+    for addr, inc, chg, final in score_candidates:
+        if current_cluster and addr == current_cluster[-1][0] + 1:
+            current_cluster.append((addr, inc, chg, final))
+        else:
+            if len(current_cluster) > len(best_cluster):
+                best_cluster = current_cluster
+            current_cluster = [(addr, inc, chg, final)]
+    if len(current_cluster) > len(best_cluster):
+        best_cluster = current_cluster
+
+    # If no cluster found, pick the single best candidate
+    if best_cluster:
+        score_addrs = [addr for addr, _, _, _ in best_cluster]
+    elif score_candidates:
+        # Fallback: top candidates by increase count
+        score_candidates.sort(key=lambda x: -x[1])
+        score_addrs = [score_candidates[0][0]]
+    else:
+        score_addrs = []
+
+    # Pick best lives candidate
+    lives_addr = None
+    if lives_candidates:
+        lives_candidates.sort(key=lambda x: -x[3])
+        lives_addr = lives_candidates[0][0]
+
+    if score_addrs:
+        print(f"  Score addresses: {[f'${a:04X}' for a in score_addrs]}")
+    else:
+        print("  No score addresses found")
+    if lives_addr:
+        print(f"  Lives address: ${lives_addr:04X}")
+    else:
+        print("  No lives address found")
+
+    return score_addrs, lives_addr
+
+
 class MamePixelEnv(gym.Env):
     """General MAME pixel-based gymnasium environment."""
 
-    def __init__(self, game_id, render=False, throttle=False):
+    def __init__(self, game_id, render=False, throttle=False,
+                 score_addrs=None, lives_addr=None):
         super().__init__()
         self.game_id = game_id
         self._render = render
@@ -116,6 +255,10 @@ class MamePixelEnv(gym.Env):
         self._steps = 0
         self._frame_stack = None
         self._prev_frame = None
+        self._score_addrs = score_addrs or []
+        self._lives_addr = lives_addr
+        self._prev_score = 0
+        self._prev_lives = 0
 
         # Discover game controls
         ways, n_buttons = discover_inputs(game_id)
@@ -135,9 +278,15 @@ class MamePixelEnv(gym.Env):
         subprocess.run(["pkill", "-f", f"mame.*{self.game_id}"],
                        capture_output=True)
         time.sleep(0.5)
-        # Need at least one RAM address to keep the pipe protocol working
+        # Build RAM address dict — always include score/lives if detected
+        ram = {"_dummy": 0x0000}
+        if self._score_addrs:
+            for i, addr in enumerate(self._score_addrs):
+                ram[f"_score{i}"] = addr
+        if self._lives_addr:
+            ram["_lives"] = self._lives_addr
         self.env = MameEnv(
-            ROMS_PATH, self.game_id, {"_dummy": 0x0000},
+            ROMS_PATH, self.game_id, ram,
             render=self._render, sound=False, throttle=self._throttle,
         )
         # Discover which button names work by trying them
@@ -229,6 +378,10 @@ class MamePixelEnv(gym.Env):
         self._frame_stack = np.stack([processed] * STACK_SIZE)
         self._prev_frame = processed.copy()
         self._steps = 0
+        self._prev_score = 0
+        # Read initial lives
+        data = self.env.step()
+        self._prev_lives = data.get("_lives", 0)
         return self._frame_stack.copy(), {}
 
     def step(self, action):
@@ -256,21 +409,49 @@ class MamePixelEnv(gym.Env):
         else:
             processed = self._prev_frame
 
-        # Reward: pixel change magnitude as activity proxy
-        diff = np.mean(np.abs(processed.astype(float) - self._prev_frame.astype(float)))
+        # Compute reward
         reward = 0.0
-        if diff > 30:
-            reward = -1.0  # likely death (big flash/transition)
-        elif diff > 3:
-            reward = 0.1   # something happening (progress)
-        reward -= 0.01     # small step penalty
+        terminated = False
+
+        if self._score_addrs:
+            # Score-based reward (much better signal)
+            score = sum(data.get(f"_score{i}", 0) << (8 * i)
+                        for i in range(len(self._score_addrs)))
+            delta = score - self._prev_score
+            if delta > 0:
+                reward += min(delta / 100.0, 10.0)  # cap to avoid huge spikes
+            elif delta < -1000:
+                # Score wrapped or reset — likely new game
+                pass
+            self._prev_score = score
+
+        if self._lives_addr:
+            # Lives-based death detection
+            lives = data.get("_lives", 0)
+            if lives < self._prev_lives and self._prev_lives > 0:
+                reward -= 5.0  # death penalty
+            if lives == 0 and self._prev_lives > 0:
+                terminated = True  # game over
+            self._prev_lives = lives
+
+        if not self._score_addrs:
+            # Fallback: pixel change heuristic
+            diff = np.mean(np.abs(
+                processed.astype(float) - self._prev_frame.astype(float)
+            ))
+            if diff > 30:
+                reward -= 1.0
+            elif diff > 3:
+                reward += 0.1
+
+        reward -= 0.01  # small step penalty
 
         self._prev_frame = processed.copy()
         self._frame_stack = np.roll(self._frame_stack, -1, axis=0)
         self._frame_stack[-1] = processed
 
         truncated = self._steps > 5000
-        return self._frame_stack.copy(), reward, False, truncated, {}
+        return self._frame_stack.copy(), reward, terminated, truncated, {}
 
     def close(self):
         if self.env:
@@ -281,23 +462,59 @@ class MamePixelEnv(gym.Env):
             self.env = None
 
 
-def train(game_id, timesteps, save_path):
-    from stable_baselines3 import PPO
-    env = MamePixelEnv(game_id, render=False, throttle=False)
-    model = PPO("CnnPolicy", env, learning_rate=2.5e-4, n_steps=128,
-                batch_size=32, n_epochs=4, gamma=0.99, clip_range=0.1,
-                ent_coef=0.01, verbose=1, device="cpu")
-    print(f"Training {game_id} for {timesteps} steps...")
+MODELS = {
+    "ppo": ("stable_baselines3", "PPO", "CnnPolicy", dict(
+        learning_rate=2.5e-4, n_steps=128, batch_size=32, n_epochs=4,
+        gamma=0.99, clip_range=0.1, ent_coef=0.01,
+    )),
+    "dqn": ("stable_baselines3", "DQN", "CnnPolicy", dict(
+        learning_rate=1e-4, buffer_size=50000, learning_starts=1000,
+        batch_size=32, gamma=0.99, exploration_fraction=0.1,
+        exploration_final_eps=0.01,
+    )),
+    "a2c": ("stable_baselines3", "A2C", "CnnPolicy", dict(
+        learning_rate=7e-4, n_steps=5, gamma=0.99, ent_coef=0.01,
+    )),
+}
+
+
+def make_model(model_name, env):
+    """Create an SB3 model by name."""
+    import importlib
+    if model_name not in MODELS:
+        raise ValueError(f"Unknown model: {model_name}. Choose from: {list(MODELS.keys())}")
+    module_name, class_name, policy, kwargs = MODELS[model_name]
+    mod = importlib.import_module(module_name)
+    cls = getattr(mod, class_name)
+    return cls(policy, env, verbose=1, device="cpu", **kwargs)
+
+
+def load_model(model_name, path):
+    """Load a saved SB3 model by name."""
+    import importlib
+    module_name, class_name, _, _ = MODELS[model_name]
+    mod = importlib.import_module(module_name)
+    cls = getattr(mod, class_name)
+    return cls.load(path)
+
+
+def train(game_id, model_name, timesteps, save_path, score_addrs=None, lives_addr=None):
+    env = MamePixelEnv(game_id, render=False, throttle=False,
+                       score_addrs=score_addrs, lives_addr=lives_addr)
+    model = make_model(model_name, env)
+    reward_src = "score RAM" if score_addrs else "pixel heuristic"
+    print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
+          f"(reward: {reward_src})...")
     model.learn(total_timesteps=timesteps)
     model.save(save_path)
     print(f"Saved to {save_path}")
     env.close()
 
 
-def evaluate(game_id, model_path, episodes):
-    from stable_baselines3 import PPO
-    env = MamePixelEnv(game_id, render=True, throttle=True)
-    model = PPO.load(model_path)
+def evaluate(game_id, model_name, model_path, episodes, score_addrs=None, lives_addr=None):
+    env = MamePixelEnv(game_id, render=True, throttle=True,
+                       score_addrs=score_addrs, lives_addr=lives_addr)
+    model = load_model(model_name, model_path)
     for ep in range(episodes):
         obs, _ = env.reset()
         total_reward, steps = 0, 0
@@ -315,13 +532,34 @@ def evaluate(game_id, model_path, episodes):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="General MAME RL agent (pixel-based)")
     parser.add_argument("game", help="MAME ROM name (e.g. qbert, pacman, dkong)")
+    parser.add_argument("--model", choices=["ppo", "dqn", "a2c"], default="ppo")
     parser.add_argument("--timesteps", type=int, default=100000)
-    parser.add_argument("--eval", type=str, default=None)
+    parser.add_argument("--eval", type=str, default=None, help="Evaluate saved model")
     parser.add_argument("--save", type=str, default=None)
     parser.add_argument("--episodes", type=int, default=3)
+    parser.add_argument("--detect-score", action="store_true",
+                        help="Auto-detect score/lives RAM before training")
+    parser.add_argument("--score-addr", type=str, default=None,
+                        help="Manual score RAM address(es), comma-separated hex (e.g. 0x00BE)")
+    parser.add_argument("--lives-addr", type=str, default=None,
+                        help="Manual lives RAM address, hex (e.g. 0x0D00)")
     args = parser.parse_args()
-    save_path = args.save or f"{args.game}_ppo"
+
+    save_path = args.save or f"{args.game}_{args.model}"
+    score_addrs, lives_addr = [], None
+
+    if args.score_addr:
+        score_addrs = [int(a.strip(), 16) for a in args.score_addr.split(",")]
+        print(f"Using manual score addresses: {[f'${a:04X}' for a in score_addrs]}")
+    if args.lives_addr:
+        lives_addr = int(args.lives_addr, 16)
+        print(f"Using manual lives address: ${lives_addr:04X}")
+    if args.detect_score and not score_addrs:
+        score_addrs, lives_addr = detect_score_ram(args.game)
+
     if args.eval:
-        evaluate(args.game, args.eval, args.episodes)
+        evaluate(args.game, args.model, args.eval, args.episodes,
+                 score_addrs, lives_addr)
     else:
-        train(args.game, args.timesteps, save_path)
+        train(args.game, args.model, args.timesteps, save_path,
+              score_addrs, lives_addr)
