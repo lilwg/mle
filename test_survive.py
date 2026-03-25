@@ -404,8 +404,19 @@ def decide(state, hops_since_progress, data=None):
 
     if action_scores:
         best_action = max(action_scores, key=action_scores.get)
+        # If stuck and all sequences are "dead" (no safe moves), force
+        # movement toward disc — dying while approaching disc is better
+        # than oscillating forever.
+        best_score = action_scores[best_action]
+        if best_score < 1_000_000 and hops_since_progress >= DISC_STALL_THRESHOLD:
+            if disc_target:
+                # Pick the move that gets closest to disc, regardless of safety
+                for a, r, c in valid:
+                    dd = grid_dist(r, c, disc_target[0], disc_target[1])
+                    if dd < grid_dist(row, col, disc_target[0], disc_target[1]):
+                        best_action = a
+                        break
     else:
-        # No sequences generated (shouldn't happen on valid grid)
         best_action = valid[0][0]
 
     # ── Update position history ──
