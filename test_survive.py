@@ -211,10 +211,55 @@ def _step_enemy(en, qpos, qprev):
         en[0] = (-1, -1)  # deactivated
 
 
-def is_sequence_safe(state, actions):
-    """Frame-perfect simulation using ROM-accurate tick logic."""
-    from qbert.frame_sim import simulate_sequence
-    return simulate_sequence(state, actions)
+def is_sequence_safe(state, actions, data=None):
+    """Frame-perfect simulation using ROM-accurate tick logic.
+    Optionally includes cy=0 entities from raw RAM for better prediction."""
+    from qbert.frame_sim import simulate_sequence, make_entity, HOP_TRIGGER, BALL_RELOAD, COILY_RELOAD
+    extra = None
+    if data is not None:
+        from qbert.state import gw_to_pos
+        from qbert.collision import classify_entity_rom
+        extra = []
+        # Find all visible enemy positions to avoid duplicates
+        visible = {e.pos for e in state.enemies if not e.harmless}
+        for n in range(10):
+            fl = data.get(f"e{n}_flags", 0)
+            st = data.get(f"e{n}_st", 0)
+            cy = data.get(f"e{n}_coll_y", 0)
+            if st == 0 or fl == 0 or cy != 0:
+                continue  # only pick up cy=0 entities (invisible to state reader)
+            ft = fl & 0x06
+            _, harmless, _ = classify_entity_rom(fl, ft, ft)
+            if harmless:
+                continue
+            gw0 = data.get(f"e{n}_gw0", 0)
+            gw1 = data.get(f"e{n}_gw1", 0)
+            epos = gw_to_pos(gw0, gw1)
+            if not is_valid(epos[0], epos[1]):
+                continue
+            if epos in visible:
+                continue  # already in state.enemies
+            pw0 = data.get(f"e{n}_pw0", 0)
+            pw1 = data.get(f"e{n}_pw1", 0)
+            eprev = gw_to_pos(pw0, pw1)
+            anim = data.get(f"e{n}_anim", 0)
+            dbits = data.get(f"e{n}_dir", 0)
+            # Determine etype
+            upper = fl & 0xE0
+            if upper == 0x60:
+                going_up = is_valid(eprev[0], eprev[1]) and epos[0] < eprev[0]
+                etype = "coily" if (going_up or fl in (0x62, 0x68, 0x6a)) else "ball"
+            else:
+                etype = "ball"
+            # In-flight entity: anim 0-5 means about to land
+            if anim == 0 or (1 <= anim <= 5):
+                sim_anim = -1  # about to land
+            elif anim <= HOP_TRIGGER:
+                sim_anim = HOP_TRIGGER
+            else:
+                sim_anim = anim
+            extra.append(make_entity(epos, eprev, sim_anim, etype, dbits, fl))
+    return simulate_sequence(state, actions, extra)
 
 
 def _is_sequence_safe_old(state, actions):
@@ -421,7 +466,7 @@ def decide(state, hops_since_progress, data=None):
         best_away = None
         best_score = -999
         for a, r, c in valid:
-            if not is_sequence_safe(state, [a]):
+            if not is_sequence_safe(state, [a], data):
                 continue
             new_cd = grid_dist(r, c, cr, cc)
             # Prefer moves that increase Coily distance AND color a cube
@@ -453,7 +498,7 @@ def decide(state, hops_since_progress, data=None):
             continue
         for a2, r2, c2 in neighbors(r1, c1):
             for a3, r3, c3 in neighbors(r2, c2):
-                if is_sequence_safe(state, [a1, a2, a3]):
+                if is_sequence_safe(state, [a1, a2, a3], data):
                     d = grid_dist(r1, c1, target[0], target[1]) if target else 0
                     if a1 not in safe_moves or d < safe_moves[a1]:
                         safe_moves[a1] = d
@@ -463,16 +508,21 @@ def decide(state, hops_since_progress, data=None):
 
     # ── Fallback: any 1-hop safe move ──
     for a, r, c in valid:
-        if (r, c) not in avoid and is_sequence_safe(state, [a]):
+        if (r, c) not in avoid and is_sequence_safe(state, [a], data):
             return a
     # Last resort: prefer non-corner moves even if in avoid
-    safe_fallbacks = [(a, r, c) for a, r, c in valid if is_sequence_safe(state, [a])]
+    safe_fallbacks = [(a, r, c) for a, r, c in valid if is_sequence_safe(state, [a], data)]
     if safe_fallbacks:
         # Prefer moves that don't go to dead-end corners
         for a, r, c in safe_fallbacks:
             if (r, c) not in DEAD_END_CORNERS:
                 return a
-        return safe_fallbacks[0][0]  # all options are corners, pick first safe one
+        # All safe moves go to corners — try UNSAFE non-corner moves instead
+        # (jumping through an enemy is better than getting trapped in a corner)
+        for a, r, c in valid:
+            if (r, c) not in DEAD_END_CORNERS:
+                return a  # risky but not certain death
+        return safe_fallbacks[0][0]  # truly no other option
 
     # ── Last resort: take disc if at launch point (all moves are death) ──
     if state.discs:
@@ -527,20 +577,40 @@ def execute_hop(env, action, tracker):
                 # Ball one row above, could hop to our destination
                 if e.pos[1] == dest[1] or e.pos[1] == dest[1] - 1:
                     return None
-    # Check RAW data for cy=0 Coily heading toward destination.
-    # find_coily_raw only returns CONFIRMED Coily (going up or fl=0x62/68/6a).
-    raw_coily, _ = find_coily_raw(data)
-    if raw_coily:
-        if raw_coily == dest:
-            return None  # Coily AT destination
-        # If Coily is at distance 1 from dest, predict its next hop.
-        # Coily targets qbert_prev; after we hop, prev = qpos.
-        cd_to_dest = grid_dist(raw_coily[0], raw_coily[1], dest[0], dest[1])
-        if cd_to_dest <= 1:
-            coily_next = predict_coily(raw_coily[0], raw_coily[1],
-                                       qpos[0], qpos[1])
-            if coily_next == dest:
-                return None  # Coily will chase to our destination
+    # Check RAW data for ANY dangerous entity at destination (including cy=0).
+    # The state reader filters cy=0 entities, but they can still kill on landing.
+    from qbert.state import gw_to_pos
+    from qbert.collision import classify_entity_rom
+    for n in range(10):
+        fl = data.get(f"e{n}_flags", 0)
+        st_raw = data.get(f"e{n}_st", 0)
+        if st_raw == 0 or fl == 0:
+            continue
+        ft = fl & 0x06
+        _, harmless, _ = classify_entity_rom(fl, ft, ft)
+        if harmless:
+            continue
+        gw0 = data.get(f"e{n}_gw0", 0)
+        gw1 = data.get(f"e{n}_gw1", 0)
+        epos = gw_to_pos(gw0, gw1)
+        if not is_valid(epos[0], epos[1]):
+            continue
+        cy_raw = data.get(f"e{n}_coll_y", 0)
+        # Entity AT destination or AT current pos — block if cy=0 (about to land)
+        if epos == dest:
+            return None
+        if epos == qpos and cy_raw == 0:
+            return None  # entity landing on us RIGHT NOW
+        # Coily within 1 hop — predict chase
+        if (fl & 0xE0) == 0x60 and grid_dist(epos[0], epos[1], dest[0], dest[1]) <= 1:
+            pw0 = data.get(f"e{n}_pw0", 0)
+            pw1 = data.get(f"e{n}_pw1", 0)
+            eprev = gw_to_pos(pw0, pw1)
+            going_up = is_valid(eprev[0], eprev[1]) and epos[0] < eprev[0]
+            if going_up or fl in (0x62, 0x68, 0x6a):
+                coily_next = predict_coily(epos[0], epos[1], qpos[0], qpos[1])
+                if coily_next == dest:
+                    return None
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue

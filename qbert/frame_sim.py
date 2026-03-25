@@ -243,7 +243,7 @@ def check_collision(qb_pos, qb_prev, entities):
     return False
 
 
-def simulate_sequence(state, actions):
+def simulate_sequence(state, actions, extra_entities=None):
     """Frame-perfect simulation of Q*bert executing a sequence of hops.
 
     Runs the ROM's update loop tick-by-tick:
@@ -252,10 +252,13 @@ def simulate_sequence(state, actions):
     - Collision checked every frame during grounded phase
 
     Returns True if Q*bert survives the entire sequence.
+    extra_entities: additional entities (e.g. cy=0 from raw RAM scan)
     """
     qb_pos = state.qbert
     qb_prev = state.qbert_prev
     entities = build_entities(state)
+    if extra_entities:
+        entities.extend(extra_entities)
 
     for action in actions:
         from qbert.sim import MOVE_DELTAS
