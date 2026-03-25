@@ -115,15 +115,24 @@ def entity_hop(en, qb_prev):
         target = qb_prev
         new_pos = predict_coily(pos[0], pos[1], target[0], target[1])
     elif etype == "ugg":
-        # Ugg moves on cube face
+        # Ugg/Wrongway moves on cube face (off-grid positions).
+        # Direction bit: 1=down(row+1), 0=up(row-1).
+        # They threaten edge cubes: left face → (r,0), right face → (r,r).
+        # For simulation, keep the off-grid position format from RAM.
         dbits = en[4]
-        right_side = pos[1] > 0
         if dbits & 1:
             nr = pos[0] + 1
-            new_pos = (nr, nr) if right_side else (nr, 0)
         else:
             nr = pos[0] - 1
-            new_pos = (nr, nr) if right_side else (nr, 0)
+        # Maintain the same face offset
+        if pos[1] < 0:
+            new_pos = (nr, -1)  # left face
+        elif pos[1] > pos[0]:
+            new_pos = (nr, nr + 1)  # right face
+        else:
+            # On-grid Ugg (edge cube) — should not normally happen in sim
+            # but handle gracefully: move down on same edge
+            new_pos = (nr, 0) if pos[1] == 0 else (nr, nr)
         en[4] = dbits >> 1
     else:
         # Ball: direction bit determines left/right
@@ -136,7 +145,13 @@ def entity_hop(en, qb_prev):
 
     # Update position
     en[1] = pos  # prev = current
-    if is_valid(new_pos[0], new_pos[1]):
+    if etype == "ugg":
+        # Ugg stays off-grid; valid as long as adjacent row exists
+        if 0 <= new_pos[0] <= MAX_ROW:
+            en[0] = new_pos
+        else:
+            en[0] = (-1, -1)  # fell off top or bottom
+    elif is_valid(new_pos[0], new_pos[1]):
         en[0] = new_pos
     elif en[5] in (0x60, 0x68) and etype != "coily":
         # Purple ball at bottom → hatch into Coily
