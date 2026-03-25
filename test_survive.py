@@ -524,32 +524,45 @@ def execute_hop(env, action, tracker):
                         return None
     port, field = MOVE_BUTTONS[action]
     # Split hop: press 3 frames, re-check, press remaining 3.
-    # This catches enemies that moved during the first 3 frames.
     env.step_n(port, field, 3)
     data2 = env.step()
     state2 = read_state(data2, tracker)
-    # Re-check with fresh positions
+    # Re-check: scan ALL entities (visible + raw cy=0) at dest
     for e in state2.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue
         if e.pos == dest:
-            # Enemy arrived at dest during first 3 frames — too late to
-            # fully abort (button already held) but we can stop pressing.
-            # Q*bert may still hop but at least we detected it.
             return wait_until_landed(env)
         d = grid_dist(e.pos[0], e.pos[1], dest[0], dest[1])
         if d <= 1 and e.anim > 0:
             if e.etype == "coily":
                 np2 = predict_coily(e.pos[0], e.pos[1],
                                     state2.qbert_prev[0], state2.qbert_prev[1])
-                if np2 == dest:
-                    # Can still abort if Q*bert hasn't started flying
-                    if data2.get("qb_anim", 0) >= 16:
-                        return None  # abort — Q*bert still grounded
+                if np2 == dest and data2.get("qb_anim", 0) >= 16:
+                    return None
             elif e.etype == "ball":
                 for npos in [(e.pos[0]+1, e.pos[1]), (e.pos[0]+1, e.pos[1]+1)]:
                     if npos == dest and data2.get("qb_anim", 0) >= 16:
-                        return None  # abort
+                        return None
+    # Also raw scan at split point for cy=0 entities
+    if data2.get("qb_anim", 0) >= 16:
+        for n in range(10):
+            fl_f = data2.get(f"e{n}_flags", 0)
+            st_f = data2.get(f"e{n}_st", 0)
+            if st_f == 0 or fl_f == 0:
+                continue
+            ft_f = fl_f & 0x06
+            _, harm_f, _ = classify_entity_rom(fl_f, ft_f, ft_f)
+            if harm_f:
+                continue
+            gw0_f = data2.get(f"e{n}_gw0", 0)
+            gw1_f = data2.get(f"e{n}_gw1", 0)
+            ep_f = gw_to_pos(gw0_f, gw1_f)
+            if ep_f == dest:
+                return None
+            cy_f = data2.get(f"e{n}_coll_y", 0)
+            if ep_f == qpos and cy_f == 0 and (fl_f & 0xE0) in (0x20, 0x60):
+                return None
     env.step_n(port, field, BUTTON_HOLD - 3)
     return wait_until_landed(env)
 
