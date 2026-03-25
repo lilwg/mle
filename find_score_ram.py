@@ -145,14 +145,19 @@ def main():
     parser.add_argument("game", help="MAME ROM name")
     parser.add_argument("--samples", type=int, default=5,
                         help="Number of score samples to collect")
+    parser.add_argument("--headless", action="store_true",
+                        help="Run unthrottled (fast, small window)")
     args = parser.parse_args()
 
     # Build RAM dict to read full range
     ram_dict = {f"_r{addr:04x}": addr for addr in SCAN_RANGE}
 
-    print(f"[{args.game}] Starting MAME...")
+    headless = getattr(args, 'headless', False)
+    print(f"[{args.game}] Starting MAME{'  (headless)' if headless else ''}...")
+    # Must use render=True for pixel capture (snapshot_pixels needs rendering)
+    # but can use throttle=False for speed
     env = MameEnv(ROMS_PATH, args.game, ram_dict,
-                  render=True, sound=False, throttle=True)
+                  render=True, sound=False, throttle=not headless)
 
     # Discover inputs
     result = env.console.writeln_expect(

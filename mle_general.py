@@ -119,76 +119,62 @@ def detect_score_region(frame1, frame2):
     return (int(y1), int(y2), int(x1), int(x2))
 
 
-# ── Bootstrap RAM Detection ───────────────────────────────────────
+# ── Bootstrap: OCR + RAM scan during training ─────────────────────
+
+BOOTSTRAP_SCAN_RANGE = range(0x0000, 0x1000)
 
 
-class RAMTracker:
-    """Track RAM bytes during gameplay to find score/lives addresses.
+class BootstrapScanner:
+    """Find score/lives RAM addresses during training via OCR + RAM matching.
 
-    Run alongside training: collect RAM snapshots correlated with
-    reward signals. After enough data, identify which RAM bytes
-    best correlate with episode reward.
+    Periodically grabs frames, OCRs the score, reads full RAM, and
+    searches for byte patterns matching the OCR'd value. Once enough
+    samples with DIFFERENT scores are collected, intersects candidates
+    to find the true score address.
     """
 
-    def __init__(self, scan_range=range(0x0000, 0x1000)):
-        self.scan_range = scan_range
-        self.snapshots = []  # list of (ram_dict, reward, step)
-        self.max_snapshots = 500
+    def __init__(self):
+        self.samples = []  # list of (ocr_score_int, ram_snapshot_dict)
+        self.found_score_addrs = []
+        self.found_lives_addr = None
+        self.done = False
 
-    def record(self, data, reward, step):
-        """Record a RAM snapshot with its associated reward."""
-        if len(self.snapshots) >= self.max_snapshots:
-            # Keep every other snapshot to make room
-            self.snapshots = self.snapshots[::2]
-        snap = {}
-        for addr in self.scan_range:
-            key = f"_r{addr:04x}"
-            if key in data:
-                snap[addr] = data[key]
-        if snap:
-            self.snapshots.append((snap, reward, step))
+    def scan(self, game_id):
+        """Run find_score_ram as a subprocess to find addresses.
+        Uses a separate MAME instance with full RAM reading."""
+        if self.done:
+            return True
 
-    def analyze(self):
-        """Find RAM addresses that correlate with positive reward.
+        import subprocess as sp
+        print("[bootstrap] Running OCR + RAM scan...")
+        result = sp.run(
+            [sys.executable, "find_score_ram.py", game_id,
+             "--samples", "5", "--headless"],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        output = result.stdout + result.stderr
 
-        Returns (score_addrs, lives_addr) or ([], None).
-        """
-        if len(self.snapshots) < 50:
-            return [], None
+        # Parse output for found addresses
+        import re
+        # Look for "Addresses matching all N samples:" section
+        for line in output.split("\n"):
+            print(f"  {line.strip()}")  # echo scan output
+            # Match lines like "  $00BE: 16-bit LE ..."
+            m = re.match(r'\s+\$([0-9A-Fa-f]{4}):', line)
+            if m:
+                addr = int(m.group(1), 16)
+                if addr not in [a for a in self.found_score_addrs]:
+                    self.found_score_addrs.append(addr)
 
-        score_candidates = []
-        lives_candidates = []
+        if self.found_score_addrs:
+            self.found_score_addrs = self.found_score_addrs[:4]
+            self.done = True
+            print(f"[bootstrap] FOUND: {[f'${a:04X}' for a in self.found_score_addrs]}")
+            return True
 
-        for addr in self.scan_range:
-            values = [s[0].get(addr, 0) for s in self.snapshots]
-            rewards = [s[1] for s in self.snapshots]
-
-            if all(v == values[0] for v in values):
-                continue
-
-            # Correlation: does this byte increase when reward is positive?
-            pos_reward_vals = [v for v, r in zip(values, rewards) if r > 0.5]
-            neg_reward_vals = [v for v, r in zip(values, rewards) if r < -0.5]
-
-            if pos_reward_vals and neg_reward_vals:
-                avg_pos = sum(pos_reward_vals) / len(pos_reward_vals)
-                avg_neg = sum(neg_reward_vals) / len(neg_reward_vals)
-                if avg_pos > avg_neg + 1:
-                    score_candidates.append((addr, avg_pos - avg_neg))
-
-            # Lives: decreases when big negative reward
-            changes = sum(1 for i in range(1, len(values)) if values[i] != values[i-1])
-            decreases = sum(1 for i in range(1, len(values))
-                           if values[i] < values[i-1])
-            first = values[0]
-            if 1 <= first <= 6 and decreases >= 1 and changes <= 10:
-                if neg_reward_vals:
-                    lives_candidates.append((addr, decreases, first))
-
-        score_addrs = [a for a, _ in sorted(score_candidates, key=lambda x: -x[1])[:4]]
-        lives_addr = lives_candidates[0][0] if lives_candidates else None
-
-        return score_addrs, lives_addr
+        print("[bootstrap] No addresses found this round")
+        return False
 
 
 def discover_inputs(game_id):
@@ -446,9 +432,9 @@ class MamePixelEnv(gym.Env):
         self._prev_ocr_score = 0
         self._score_region = None
         self._ocr_calibrated = False
-        # Bootstrap: track RAM during survival-based training
+        # Bootstrap: OCR + RAM scan during training
         self._bootstrap = bootstrap
-        self._ram_tracker = RAMTracker() if bootstrap else None
+        self._scanner = BootstrapScanner() if bootstrap else None
         self._bootstrapped = False
 
         # Discover game controls
@@ -476,10 +462,7 @@ class MamePixelEnv(gym.Env):
                 ram[f"_score{i}"] = addr
         if self._lives_addr:
             ram["_lives"] = self._lives_addr
-        # Bootstrap mode: also read full RAM range for correlation tracking
-        if self._bootstrap and not self._bootstrapped:
-            for addr in range(0x0000, 0x1000):
-                ram[f"_r{addr:04x}"] = addr
+        # Bootstrap reads RAM via Lua console on-demand, not every frame
         self.env = MameEnv(
             ROMS_PATH, self.game_id, ram,
             render=self._render, sound=False, throttle=self._throttle,
@@ -655,25 +638,26 @@ class MamePixelEnv(gym.Env):
         # Staying alive = good. This is the universal fallback.
         reward += 0.1  # survive bonus per step
 
-        # Bootstrap: track RAM correlation with reward
-        if self._ram_tracker and not self._bootstrapped:
-            self._ram_tracker.record(data, reward, self._total_steps)
-            # After 10K steps, analyze and switch to RAM-based reward
-            if self._total_steps > 0 and self._total_steps % 10000 == 0:
-                new_score, new_lives = self._ram_tracker.analyze()
-                if new_score:
-                    print(f"[bootstrap] Detected score addresses: "
-                          f"{[f'${a:04X}' for a in new_score]}")
-                    self._score_addrs = new_score
-                    self._bootstrapped = True
-                if new_lives and not self._lives_addr:
-                    print(f"[bootstrap] Detected lives address: ${new_lives:04X}")
-                    self._lives_addr = new_lives
-                    self._bootstrapped = True
-                if self._bootstrapped:
-                    print("[bootstrap] Switching to RAM-based reward!")
-                    # Restart MAME with new RAM addresses
+        # Bootstrap: periodically OCR + RAM scan to find addresses
+        if self._scanner and not self._bootstrapped:
+            if self._total_steps > 500 and self._total_steps % 2000 == 0:
+                try:
+                    # Close current MAME, run scan in separate instance
+                    self.env.close()
+                    self.env = None
+                    found = self._scanner.scan(self.game_id)
+                    if found:
+                        self._score_addrs = self._scanner.found_score_addrs
+                        if self._scanner.found_lives_addr:
+                            self._lives_addr = self._scanner.found_lives_addr
+                        self._bootstrapped = True
+                        print("[bootstrap] Switching to RAM-based reward!")
+                    # Restart MAME (with new addrs if found)
                     self._start_mame()
+                except Exception as e:
+                    print(f"[bootstrap] Scan error: {e}")
+                    if self.env is None:
+                        self._start_mame()
 
         self._prev_frame = processed.copy()
         self._frame_stack = np.roll(self._frame_stack, -1, axis=0)
