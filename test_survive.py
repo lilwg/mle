@@ -293,6 +293,36 @@ def find_coily(state):
     return None
 
 
+def find_coily_raw(data):
+    """Find Coily including cy=0 entities by scanning RAW RAM.
+    This catches in-flight Coily that the state reader filters out.
+    Returns (pos, prev_pos) or (None, None)."""
+    from qbert.state import gw_to_pos
+    for n in range(10):
+        flags = data.get(f"e{n}_flags", 0)
+        st = data.get(f"e{n}_st", 0)
+        if st == 0 or flags == 0:
+            continue
+        # Coily family: flags & 0xE0 == 0x60
+        if (flags & 0xE0) != 0x60:
+            continue
+        gw0 = data.get(f"e{n}_gw0", 0)
+        gw1 = data.get(f"e{n}_gw1", 0)
+        pos = gw_to_pos(gw0, gw1)
+        if not is_valid(pos[0], pos[1]):
+            continue
+        pw0 = data.get(f"e{n}_pw0", 0)
+        pw1 = data.get(f"e{n}_pw1", 0)
+        prev = gw_to_pos(pw0, pw1)
+        # Only return if going UP (confirmed Coily, not pre-hatch ball)
+        if is_valid(prev[0], prev[1]) and pos[0] < prev[0]:
+            return pos, prev
+        # Or if flags indicate hatched (0x62, 0x68, 0x6a)
+        if flags in (0x62, 0x68, 0x6a):
+            return pos, prev
+    return None, None
+
+
 def pick_target(state, coily_dead=False):
     """Pick next cube to color.
     - (6,6) first (safe diagonal from start)
@@ -336,7 +366,7 @@ def nearest_disc(state, pos):
     return best, best_d
 
 
-def decide(state, hops_since_progress):
+def decide(state, hops_since_progress, data=None):
     """Pick the best action. Returns action int or None (wait)."""
     row, col = state.qbert
     if not is_valid(row, col):
@@ -386,8 +416,6 @@ def decide(state, hops_since_progress):
 
     # ── Straight-line evasion: when Coily is very close and we're stuck,
     # move in a straight line away from Coily to drag him, then reverse ──
-    # Only activate when genuinely trapped (stuck + Coily close), not
-    # when we're making normal progress near Coily.
     if coily and coily_d <= 1 and hops_since_progress >= 3:
         cr, cc = coily
         best_away = None
@@ -499,6 +527,20 @@ def execute_hop(env, action, tracker):
                 # Ball one row above, could hop to our destination
                 if e.pos[1] == dest[1] or e.pos[1] == dest[1] - 1:
                     return None
+    # Check RAW data for cy=0 Coily heading toward destination.
+    # find_coily_raw only returns CONFIRMED Coily (going up or fl=0x62/68/6a).
+    raw_coily, _ = find_coily_raw(data)
+    if raw_coily:
+        if raw_coily == dest:
+            return None  # Coily AT destination
+        # If Coily is at distance 1 from dest, predict its next hop.
+        # Coily targets qbert_prev; after we hop, prev = qpos.
+        cd_to_dest = grid_dist(raw_coily[0], raw_coily[1], dest[0], dest[1])
+        if cd_to_dest <= 1:
+            coily_next = predict_coily(raw_coily[0], raw_coily[1],
+                                       qpos[0], qpos[1])
+            if coily_next == dest:
+                return None  # Coily will chase to our destination
     for e in state.enemies:
         if e.harmless or not is_valid(e.pos[0], e.pos[1]):
             continue
@@ -663,9 +705,8 @@ def run():
                                 f" fl={e.flags:#x} a={e.anim}"
                                 f" prev={e.prev_pos} cy={e.coll_y}"
                                 f"{' HARMLESS' if e.harmless else ''}")
-                # Raw slot dump — catch enemies invisible to state parser
-                if hops % 10 == 0 or current_level >= 3:
-                    for n in range(10):
+                # Raw slot dump — ALWAYS on death to catch invisible killers
+                for n in range(10):
                         fl = data.get(f"e{n}_flags", 0)
                         st_raw = data.get(f"e{n}_st", 0)
                         cy = data.get(f"e{n}_coll_y", 0)
@@ -725,7 +766,7 @@ def run():
             state.discs = [d for d in state.discs if d.side not in used_discs]
 
             # ── Decide ──
-            action = decide(state, hops_since_progress)
+            action = decide(state, hops_since_progress, data)
 
             if action is None:
                 for _ in range(6):
@@ -760,6 +801,9 @@ def run():
                 continue
 
             pos_before = pos
+            # Save pre-hop enemy state for death diagnosis
+            pre_hop_enemies = [(e.slot, e.etype, e.pos, e.prev_pos, e.flags, e.anim, e.coll_y)
+                               for e in state.enemies if not e.harmless]
             data = execute_hop(env, action, tracker)
             if data is None:
                 # Real-time check aborted — enemy at destination
@@ -777,10 +821,14 @@ def run():
                 for e in state.enemies:
                     if e.harmless:
                         continue
-                    killers += (f"\n    s{e.slot}:{e.etype}@{e.pos}"
+                    killers += (f"\n    POST s{e.slot}:{e.etype}@{e.pos}"
                                 f" fl={e.flags:#x} a={e.anim} prev={e.prev_pos}")
+                pre_info = ""
+                for s, et, p, pp, fl, an, cy in pre_hop_enemies:
+                    pre_info += (f"\n    PRE  s{s}:{et}@{p}"
+                                 f" fl={fl:#x} a={an} prev={pp} cy={cy}")
                 print(f"  KILLED at hop {hops} @{state.qbert} ({pos_before}→{state.qbert})"
-                      f"{killers}")
+                      f"{pre_info}{killers}")
 
             # ── Track progress ──
             # Track any cube state change (not just reaching target_color)
@@ -823,7 +871,7 @@ def run():
                 print(f"  hop {hops}: {state.qbert} cubes={new_cubes}/{NUM_CUBES} "
                       f"→{tgt} cd={cd} lives={state.lives} "
                       f"stuck={hops_since_progress}"
-                      f"{' ['+enemies_str+']' if current_level >= 3 and enemies_str else ''}")
+                      f"{' ['+enemies_str+']' if enemies_str else ''}")
 
     except KeyboardInterrupt:
         print("\nStopped.")
