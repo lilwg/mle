@@ -147,7 +147,7 @@ def main():
                         help="Number of score samples to collect")
     parser.add_argument("--headless", action="store_true",
                         help="Run unthrottled (fast, small window)")
-    parser.add_argument("--human", action="store_true",
+    parser.add_argument("--manual", action="store_true",
                         help="You play, script watches and scans RAM")
     args = parser.parse_args()
 
@@ -199,7 +199,7 @@ def main():
     # Collect samples: play, screenshot, OCR, scan RAM
     import random
     samples = []  # list of (ocr_numbers_list, ram_snapshot)
-    human = getattr(args, 'human', False)
+    human = getattr(args, 'manual', False)
 
     if human:
         print(">>> YOU PLAY the game. Press Enter here to capture each sample.")
