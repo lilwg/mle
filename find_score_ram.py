@@ -196,17 +196,25 @@ def main():
 
     # Collect samples: play, screenshot, OCR, scan RAM
     import random
-    all_candidates = []  # list of sets of (addr, encoding)
+    samples = []  # list of (ocr_numbers_list, ram_snapshot)
 
     for sample_idx in range(args.samples):
         # Play randomly for a bit
-        n_play = 200 + sample_idx * 100
+        n_play = 300 + sample_idx * 150
         for i in range(n_play):
             if actions and random.random() < 0.7:
                 port, field = random.choice(actions)
                 env.step(port, field)
             else:
                 env.step()
+
+        # Re-coin if needed (game over from random play)
+        if coin:
+            env.step_n(*coin, 15)
+            env.wait(30)
+        if start:
+            env.step_n(*start, 5)
+            env.wait(30)
 
         # Grab frame + RAM
         env.request_frame()
@@ -218,69 +226,95 @@ def main():
             continue
 
         frame = data["frame"]
-        # Save screenshot for debugging
         img = Image.fromarray(frame)
         img.save(f"/tmp/{args.game}_sample{sample_idx}.png")
 
-        # OCR the score
         scores = ocr_score(frame)
         if not scores:
             print(f"  Sample {sample_idx + 1}: OCR found no numbers")
             continue
 
         print(f"  Sample {sample_idx + 1}: OCR found {scores}")
-
-        # For each OCR'd number, find matching RAM addresses
-        sample_matches = set()
-        for score_str in scores:
-            score_val = int(score_str)
-            matches = find_matching_ram(ram, score_val)
-            for addr, encoding in matches.items():
-                sample_matches.add((addr, encoding))
-
-        if sample_matches:
-            all_candidates.append(sample_matches)
-            print(f"    {len(sample_matches)} RAM candidates")
-        else:
-            print(f"    No RAM matches for OCR values {scores}")
+        samples.append((scores, ram))
 
     env.close()
 
-    # Intersect candidates across samples — addresses that match EVERY time
-    if not all_candidates:
-        print("\nNo candidates found. The game may need manual address identification.")
+    if len(samples) < 2:
+        print("\nNot enough samples. The game may need manual identification.")
         return
 
-    # Find addresses that appear in ALL samples
-    common_addrs = set(c[0] for c in all_candidates[0])
-    for candidates in all_candidates[1:]:
-        sample_addrs = set(c[0] for c in candidates)
-        common_addrs &= sample_addrs
+    # For each sample, pick the most likely "current score" from OCR values.
+    # Strategy: for each address, check if it encodes the OCR'd score in
+    # EVERY sample. An address is the score if it consistently matches.
 
-    if common_addrs:
+    # Get candidate scores per sample (try each OCR'd number)
+    sample_scores = []
+    for scores, ram in samples:
+        sample_scores.append([int(s) for s in scores])
+
+    # For each RAM address, check: does it match SOME OCR number in EACH sample?
+    # And does its value CHANGE between samples?
+    consistent_addrs = {}  # addr -> list of (sample_idx, matched_score, encoding)
+
+    def byte_matches_score(val, score_val):
+        """Check if a single byte could encode score_val."""
+        if val == score_val and score_val <= 255:
+            return "raw"
+        # BCD
+        if (val >> 4) <= 9 and (val & 0xF) <= 9:
+            bcd = ((val >> 4) * 10) + (val & 0xF)
+            if bcd == score_val and score_val <= 99:
+                return "BCD"
+        # Low byte of 16-bit
+        if score_val <= 0xFFFF and (score_val & 0xFF) == val:
+            return "16bit-lo"
+        return None
+
+    for addr in SCAN_RANGE:
+        addr_matches = []
+        for si, (scores, ram) in enumerate(samples):
+            val = ram.get(addr, 0)
+            matched = None
+            for score_val in sample_scores[si]:
+                enc = byte_matches_score(val, score_val)
+                if enc:
+                    matched = (score_val, enc)
+                    break
+            if matched:
+                addr_matches.append((si, matched[0], matched[1]))
+
+        # Must match in at least 2 samples
+        if len(addr_matches) >= 2:
+            # Value must change (not a constant byte matching a constant OCR number)
+            values = [samples[si][1].get(addr, -1) for si, _, _ in addr_matches]
+            matched_scores = [sc for _, sc, _ in addr_matches]
+            if len(set(values)) >= 2 or len(set(matched_scores)) >= 2:
+                consistent_addrs[addr] = addr_matches
+
+    if consistent_addrs:
+        # Rank by number of samples matched
+        ranked = sorted(consistent_addrs.items(),
+                       key=lambda x: -len(x[1]))
+        best_addr, best_matches = ranked[0]
+
         print(f"\n{'='*60}")
-        print(f"Addresses matching all {len(all_candidates)} samples:")
+        print(f"Consistent RAM addresses ({len(consistent_addrs)} found):")
         print(f"{'='*60}")
-        # Get encoding info from last sample
-        last_matches = {addr: enc for addr, enc in all_candidates[-1]}
-        for addr in sorted(common_addrs):
-            enc = last_matches.get(addr, "?")
-            print(f"  ${addr:04X}: {enc}")
+        for addr, matches in ranked[:10]:
+            scores_str = ", ".join(f"{sc}" for _, sc, _ in matches)
+            enc = matches[-1][2]
+            print(f"  ${addr:04X}: matched scores [{scores_str}] ({enc})")
 
-        # Suggest config
-        addrs_hex = [f'"0x{a:04X}"' for a in sorted(common_addrs)[:4]]
+        top_addrs = [addr for addr, _ in ranked[:4]]
+        addrs_hex = [f'"0x{a:04X}"' for a in top_addrs]
         print(f"\nSuggested game_configs.json entry:")
         print(f'  "{args.game}": {{')
         print(f'    "score_addrs": [{", ".join(addrs_hex)}],')
         print(f'    "lives_addr": "TODO"')
         print(f'  }}')
     else:
-        print(f"\nNo addresses consistent across all samples.")
-        print("Showing candidates from individual samples:")
-        for i, candidates in enumerate(all_candidates):
-            print(f"\n  Sample {i + 1}:")
-            for addr, enc in sorted(candidates)[:10]:
-                print(f"    ${addr:04X}: {enc}")
+        print(f"\nNo consistent score addresses found.")
+        print("Try playing the game manually or increase --samples.")
 
 
 if __name__ == "__main__":
