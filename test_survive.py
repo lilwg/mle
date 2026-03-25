@@ -247,6 +247,15 @@ def score_sequence(state, actions, alive, target, coily_pos,
         if pq_worst <= -200:
             score += pq_worst  # -200 penalty for traversing dead-end
         score += cd * 150
+        # Extra penalty if first hop lands adjacent to Coily's predicted next pos
+        first_pos = positions[1]
+        coily_next = predict_coily(coily_pos[0], coily_pos[1],
+                                   state.qbert[0], state.qbert[1])
+        if is_valid(coily_next[0], coily_next[1]):
+            first_to_coily_next = grid_dist(first_pos[0], first_pos[1],
+                                             coily_next[0], coily_next[1])
+            if first_to_coily_next == 0:
+                score -= 800  # Coily will hop to our first position
     else:
         score += pq_final
         if pq_worst <= -200:
