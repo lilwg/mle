@@ -280,9 +280,14 @@ def read_state(data, tracker=None):
 
         coll_y = data.get(f"e{n}_coll_y", 0)
         # ROM $B576/$B6C6: entity is INACTIVE when [bp+0xD] (coll_y) == 0.
-        # This is the ROM's own check — same one the renderer uses.
+        # EXCEPTION: Slot 0 is Coily's slot. ROM $B640 sets cy=0 on hatch.
+        # A freshly hatched Coily has cy=0 but IS active and deadly.
+        # Include it if flags are in the Coily family (0x60-0x6F).
         if coll_y == 0:
-            continue
+            if n == 0 and (flags & 0xE0) == 0x60 and st != 0:
+                pass  # freshly hatched Coily in slot 0 — include it
+            else:
+                continue
 
         enemies.append(Enemy(
             slot=n, pos=pos, prev_pos=prev,
