@@ -50,35 +50,80 @@ class QbertEnv(gym.Env):
         self.current_level = 1
 
     def _start_mame(self):
-        """Launch MAME and get to gameplay."""
+        """Launch MAME and get to gameplay. Retries on failure."""
+        import subprocess, time
         if self.env is not None:
             try:
                 self.env.close()
             except Exception:
                 pass
-        self.env = MameEnv(
-            ROMS_PATH, "qbert", QBERT_RAM,
-            render=self._render, sound=False, throttle=self._throttle,
-        )
-        # Insert coin and start game
-        self.env.wait(600)
-        self.env.step_n(*COIN_BUTTON, 15)
-        self.env.wait(180)
-        self.env.step_n(*START_BUTTON, 5)
-        # Wait for game to start
-        self.data = self.env.step()
-        self.state = read_state(self.data, self.tracker)
-        for _ in range(900):
-            if (0 < self.state.lives <= 5
-                    and is_valid(self.state.qbert[0], self.state.qbert[1])):
-                break
-            self.data = self.env.step()
-            self.state = read_state(self.data, self.tracker)
+            self.env = None
+            time.sleep(0.5)
+        # Kill any stale MAME processes
+        subprocess.run(["pkill", "-f", "mame.*qbert"], capture_output=True)
+        time.sleep(0.5)
+
+        for attempt in range(3):
+            try:
+                self.env = MameEnv(
+                    ROMS_PATH, "qbert", QBERT_RAM,
+                    render=self._render, sound=False, throttle=self._throttle,
+                )
+                # Insert coin and start game
+                self.env.wait(600)
+                self.env.step_n(*COIN_BUTTON, 15)
+                self.env.wait(180)
+                self.env.step_n(*START_BUTTON, 5)
+                # Wait for game to start
+                self.data = self.env.step()
+                self.state = read_state(self.data, self.tracker)
+                for _ in range(900):
+                    if (0 < self.state.lives <= 5
+                            and is_valid(self.state.qbert[0], self.state.qbert[1])):
+                        return  # success
+                    self.data = self.env.step()
+                    self.state = read_state(self.data, self.tracker)
+                return  # got past wait loop
+            except Exception as e:
+                print(f"MAME start attempt {attempt+1} failed: {e}")
+                try:
+                    if self.env:
+                        self.env.close()
+                except Exception:
+                    pass
+                self.env = None
+                subprocess.run(["pkill", "-f", "mame.*qbert"], capture_output=True)
+                time.sleep(1)
+        raise RuntimeError("Failed to start MAME after 3 attempts")
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.tracker = EnemyTracker()
-        self._start_mame()
+
+        if self.env is None:
+            # First reset — launch MAME
+            self._start_mame()
+        else:
+            # Subsequent resets — just insert coin and start new game
+            # (much faster than restarting MAME)
+            try:
+                self.env.wait(60)
+                self.env.step_n(*COIN_BUTTON, 15)
+                self.env.wait(60)
+                self.env.step_n(*START_BUTTON, 5)
+                # Wait for game to start
+                self.data = self.env.step()
+                self.state = read_state(self.data, self.tracker)
+                for _ in range(900):
+                    if (0 < self.state.lives <= 5
+                            and is_valid(self.state.qbert[0], self.state.qbert[1])):
+                        break
+                    self.data = self.env.step()
+                    self.state = read_state(self.data, self.tracker)
+            except Exception:
+                # Pipe broke — restart MAME
+                self._start_mame()
+
         self.prev_lives = self.state.lives
         self.prev_colored = self._count_colored()
         self.prev_coily_active = False
