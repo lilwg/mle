@@ -117,7 +117,11 @@ def find_mode(game_id):
                     addr = int(key[1:], 16)
                     ram[addr] = val
             samples.append((score_val, ram))
-            print(f"    Captured score={score_val} ({len(ram)} bytes)")
+            # Show neighborhood of known candidate addresses
+            for probe in [0x83EE]:
+                nearby = [ram.get(probe + i, -1) for i in range(-20, 21)]
+                digits = [str(v) if 0 <= v <= 9 else '.' for v in nearby]
+                print(f"    Captured score={score_val} — near ${probe:04X}: {' '.join(digits)}")
         else:
             print("    No data yet, try again")
 
