@@ -151,15 +151,25 @@ def main():
                         help="You play, script watches and scans RAM")
     args = parser.parse_args()
 
-    # Build RAM dict to read full range
-    ram_dict = {f"_r{addr:04x}": addr for addr in SCAN_RANGE}
-
     headless = getattr(args, 'headless', False)
+    manual = getattr(args, 'manual', False)
+
+    # Use pipe to read RAM every frame. Keep under 500 addresses for stability.
+    # For manual mode with large SCAN_RANGE, split into multiple runs.
+    ram_dict = {f"_r{addr:04x}": addr for addr in SCAN_RANGE}
+    if len(ram_dict) > 500:
+        # Too many for pipe — reduce to first 500
+        scan_addrs = list(SCAN_RANGE)[:500]
+        ram_dict = {f"_r{addr:04x}": addr for addr in scan_addrs}
+        print(f"  Note: scanning first {len(scan_addrs)} addresses "
+              f"(${scan_addrs[0]:04X}-${scan_addrs[-1]:04X})")
+
     print(f"[{args.game}] Starting MAME{'  (headless)' if headless else ''}...")
-    # Must use render=True for pixel capture (snapshot_pixels needs rendering)
-    # but can use throttle=False for speed
+    # Manual: throttled + sound so you can play normally
+    # Auto: unthrottled for speed
     env = MameEnv(ROMS_PATH, args.game, ram_dict,
-                  render=True, sound=False, throttle=not headless)
+                  render=True, sound=manual,
+                  throttle=manual)
 
     # Discover inputs
     result = env.console.writeln_expect(
@@ -184,30 +194,51 @@ def main():
             elif "p1" in fl and any(d in fl for d in ["up", "down", "left", "right", "button"]):
                 actions.append((port, field))
 
-    # Insert coin + start
-    if coin:
-        env.step_n(*coin, 15)
-    env.wait(120)
-    if start:
-        env.step_n(*start, 5)
-    env.wait(300)
-
-    print(f"[{args.game}] Game started. Playing randomly to generate score...")
+    if manual:
+        print(f"\n[{args.game}] MAME is starting. Use keyboard to play.")
+        print(f"  Press 5 to insert coin, 1 to start.")
+        print(f"  Play the game and score some points.\n")
+    else:
+        # Auto: insert coin + start
+        if coin:
+            env.step_n(*coin, 15)
+        env.wait(120)
+        if start:
+            env.step_n(*start, 5)
+        env.wait(300)
+        print(f"[{args.game}] Game started. Playing randomly to generate score...")
     print(f"  Actions: {[f[1] for f in actions]}")
     print()
 
     # Collect samples: play, screenshot, OCR, scan RAM
     import random
     samples = []  # list of (ocr_numbers_list, ram_snapshot)
-    human = getattr(args, 'manual', False)
 
-    if human:
-        print(">>> YOU PLAY the game. Press Enter here to capture each sample.")
-        print(f">>> Need {args.samples} samples with different scores.\n")
+    if manual:
+        print(">>> Play the game normally using the keyboard.")
+        print(f">>> Press Enter here to capture a sample ({args.samples} needed).")
+        print(f">>> Try to get different scores between samples.\n")
+
+        # Pump thread: keeps stepping MAME so the game runs freely
+        import threading
+        _running = [True]
+
+        def _pump():
+            while _running[0]:
+                try:
+                    env.step()
+                except Exception:
+                    break
+
+        pump_thread = threading.Thread(target=_pump, daemon=True)
+        pump_thread.start()
 
     for sample_idx in range(args.samples):
-        if human:
+        if manual:
             input(f"  [Sample {sample_idx + 1}/{args.samples}] Press Enter to capture...")
+            _running[0] = False  # pause pump to grab frame safely
+            pump_thread.join(timeout=2)
+            import time; time.sleep(0.1)
         else:
             # Play randomly for a bit
             n_play = 300 + sample_idx * 150
@@ -226,10 +257,14 @@ def main():
                 env.step_n(*start, 5)
                 env.wait(30)
 
-        # Grab frame + RAM
+        # Grab frame + RAM (only addresses in our pipe dict)
         env.request_frame()
         data = env.step()
-        ram = {addr: data.get(f"_r{addr:04x}", 0) for addr in SCAN_RANGE}
+        ram = {}
+        for key, val in data.items():
+            if key.startswith("_r"):
+                addr = int(key[2:], 16)
+                ram[addr] = val
 
         if "frame" not in data:
             print(f"  Sample {sample_idx + 1}: no frame data")
@@ -247,6 +282,14 @@ def main():
         print(f"  Sample {sample_idx + 1}: OCR found {scores}")
         samples.append((scores, ram))
 
+        # Restart pump thread for manual mode
+        if manual and sample_idx < args.samples - 1:
+            _running[0] = True
+            pump_thread = threading.Thread(target=_pump, daemon=True)
+            pump_thread.start()
+
+    if manual:
+        _running[0] = False
     env.close()
 
     if len(samples) < 2:
