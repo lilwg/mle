@@ -1,12 +1,25 @@
 {
     "qbert": {
-        "score_addrs": ["0x00BE", "0x00BF"],
+        "score_addrs": [
+            "0x00BE",
+            "0x00BF"
+        ],
         "lives_addr": "0x0D00",
         "verified": true
     },
     "galaga": {
+        "score_addrs": [
+            "0x83FB",
+            "0x83FA",
+            "0x83F9",
+            "0x83F8",
+            "0x83F7",
+            "0x83F6"
+        ],
+        "encoding": "tile",
+        "verified": true,
         "lives_addr": "0x9820",
-        "verified": "lives only, from cheat DB"
+        "notes": "Tile digits high→low. 6 digits max."
     },
     "dkong": {
         "lives_addr": "0x6228",
