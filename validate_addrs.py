@@ -119,10 +119,10 @@ def find_mode(game_id):
             samples.append((score_val, ram))
             # Show values at regular strides from $83EE (rotated screen = stride 32)
             probe = 0x83EE
-            for stride in [1, 32]:
-                vals = [(probe + i*stride, ram.get(probe + i*stride, -1)) for i in range(-5, 6)]
-                parts = [f"{a:04X}={v}" if 0 <= v <= 9 else f"{a:04X}=." for a, v in vals]
-                print(f"    score={score_val} stride={stride}: {' '.join(parts)}")
+            # Show RAW values near $83EA-$83F0
+            vals = [(0x83E8 + i, ram.get(0x83E8 + i, -1)) for i in range(12)]
+            parts = [f"{a:04X}={v:3d}" for a, v in vals]
+            print(f"    score={score_val}: {' '.join(parts)}")
         else:
             print("    No data yet, try again")
 
