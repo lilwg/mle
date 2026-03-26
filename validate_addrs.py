@@ -225,6 +225,19 @@ def find_mode(game_id):
         for addr, vals in increasing[:30]:
             print(f"    ${addr:04X}: {vals}")
 
+        # Also show ALL bytes different between first and last capture
+        first_ram = samples[0][1]
+        last_ram = samples[-1][1]
+        diffs = []
+        for addr in sorted(all_addrs):
+            v0 = first_ram.get(addr, -1)
+            v1 = last_ram.get(addr, -1)
+            if v0 != v1 and v0 >= 0 and v1 >= 0:
+                diffs.append((addr, v0, v1))
+        print(f"\n  {len(diffs)} bytes differ between first and last capture:")
+        for addr, v0, v1 in diffs[:40]:
+            print(f"    ${addr:04X}: {v0} → {v1}")
+
     if consistent:
         print(f"\nCandidate addresses ({len(consistent)} found):")
         for addr, matches in sorted(consistent.items())[:20]:
