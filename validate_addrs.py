@@ -128,6 +128,7 @@ def find_mode(game_id):
     for _, ram in samples:
         all_addrs.update(ram.keys())
 
+    # Method 1: single-byte match (raw, BCD, 16-bit)
     consistent = {}
     for addr in sorted(all_addrs):
         matches = []
@@ -140,9 +141,49 @@ def find_mode(game_id):
         if len(matches) == len(samples) and len(set(m[1] for m in matches)) >= 2:
             consistent[addr] = matches
 
+    # Method 2: digit match — score stored as individual digits (0-9 per byte)
+    # e.g. score 1060 → digits [1, 0, 6, 0] somewhere in RAM
+    if not consistent:
+        print("  No single-byte match. Trying digit matching...")
+        # For each score, build digit list
+        score_digits = {}
+        for score_val, _ in samples:
+            score_digits[score_val] = [int(d) for d in str(score_val)]
+
+        # Find addresses where byte == a digit of the score, and the digit
+        # position is consistent across samples
+        # For each address, check: does it always hold the Nth digit?
+        for pos in range(6):  # up to 6-digit scores
+            candidates = {}
+            for addr in sorted(all_addrs):
+                matches = []
+                for score_val, ram in samples:
+                    if addr not in ram:
+                        break
+                    digits = score_digits[score_val]
+                    # Pad to same length
+                    max_len = max(len(score_digits[s]) for s, _ in samples)
+                    padded = [0] * (max_len - len(digits)) + digits
+                    if pos < len(padded) and ram[addr] == padded[pos]:
+                        matches.append((score_val, ram[addr]))
+                if len(matches) == len(samples) and len(set(m[1] for m in matches)) >= 2:
+                    candidates[addr] = matches
+            if candidates:
+                for addr, matches in candidates.items():
+                    consistent[addr] = [(s, v, f"digit-pos{pos}") for s, v in matches]
+
+    # Method 3: just find bytes that CHANGED between captures and are in 0-9 range
+    if not consistent:
+        print("  No digit match. Showing bytes that changed (0-9 range)...")
+        for addr in sorted(all_addrs):
+            vals = [ram.get(addr, -1) for _, ram in samples]
+            if all(0 <= v <= 9 for v in vals) and len(set(vals)) >= 2:
+                consistent[addr] = [(s, ram.get(addr, 0), "changed-digit")
+                                     for s, ram in samples]
+
     if consistent:
-        print(f"\nAddresses matching all scores:")
-        for addr, matches in sorted(consistent.items()):
+        print(f"\nCandidate addresses ({len(consistent)} found):")
+        for addr, matches in sorted(consistent.items())[:20]:
             scores_str = " ".join(f"{s}→{v}" for s, v, _ in matches)
             print(f"  ${addr:04X}: {matches[0][2]} [{scores_str}]")
 
