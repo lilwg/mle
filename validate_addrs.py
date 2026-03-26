@@ -181,13 +181,25 @@ def find_mode(game_id):
                 for addr, matches in candidates.items():
                     consistent[addr] = [(s, v, f"digit-pos{pos}") for s, v in matches]
 
-    # Method 3: just find bytes that CHANGED between captures and are in 0-9 range
+    # Method 3: find bytes that increase with score (any encoding)
     if not consistent:
-        print("  No digit match. Showing bytes that changed (0-9 range)...")
+        print("  No digit match. Finding bytes correlated with score...")
+        scores = [s for s, _ in samples]
         for addr in sorted(all_addrs):
             vals = [ram.get(addr, -1) for _, ram in samples]
-            if all(0 <= v <= 9 for v in vals) and len(set(vals)) >= 2:
-                consistent[addr] = [(s, ram.get(addr, 0), "changed-digit")
+            if len(set(vals)) < 2:
+                continue
+            # Check if byte increases when score increases
+            increases_match = True
+            for i in range(1, len(samples)):
+                if scores[i] > scores[i-1] and vals[i] <= vals[i-1]:
+                    increases_match = False
+                    break
+                if scores[i] < scores[i-1] and vals[i] >= vals[i-1]:
+                    increases_match = False
+                    break
+            if increases_match:
+                consistent[addr] = [(s, ram.get(addr, 0), "correlated")
                                      for s, ram in samples]
 
     if consistent:
