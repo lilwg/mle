@@ -207,6 +207,26 @@ def find_mode(game_id):
                 consistent[addr] = [(s, ram.get(addr, 0), "correlated")
                                      for s, ram in samples]
 
+    # Method 4: show ALL bytes that changed, sorted by correlation strength
+    if not consistent:
+        print("  Showing all changed bytes (sorted by monotonic correlation)...")
+        scores = [s for s, _ in samples]
+        changed = {}
+        for addr in sorted(all_addrs):
+            vals = [ram.get(addr, -1) for _, ram in samples]
+            if len(set(vals)) < 2:
+                continue
+            # Score: how well does this byte track the score direction?
+            correct = 0
+            for i in range(1, len(samples)):
+                if (scores[i] > scores[i-1]) == (vals[i] > vals[i-1]):
+                    correct += 1
+            changed[addr] = (correct, vals)
+        # Show top 20 by correlation
+        top = sorted(changed.items(), key=lambda x: -x[1][0])[:20]
+        for addr, (corr, vals) in top:
+            print(f"  ${addr:04X}: corr={corr}/{len(samples)-1} vals={vals}")
+
     if consistent:
         print(f"\nCandidate addresses ({len(consistent)} found):")
         for addr, matches in sorted(consistent.items())[:20]:
