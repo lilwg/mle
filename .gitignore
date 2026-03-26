@@ -13,3 +13,7 @@ ini/
 *.hex
 *.bin
 *.zip
+*.log
+cfg/
+sta/
+console_history

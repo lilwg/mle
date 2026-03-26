@@ -134,7 +134,14 @@ class QbertEnv(gym.Env):
     def step(self, action):
         self.steps += 1
         action = int(action)
+        try:
+            return self._step_inner(action)
+        except (IOError, OSError, TimeoutError):
+            # MAME crashed — restart and return a death-like observation
+            self._start_mame()
+            return self._get_obs(), -50.0, True, False, {"mame_crash": True}
 
+    def _step_inner(self, action):
         # Execute action
         if action == NOOP:
             # Advance a few frames
