@@ -13,13 +13,12 @@
             "0x83FA",
             "0x83F9",
             "0x83F8",
-            "0x83F7",
-            "0x83F6"
+            "0x83F7"
         ],
         "encoding": "tile",
         "verified": true,
         "lives_addr": "0x9820",
-        "notes": "Tile digits high→low. 6 digits max."
+        "notes": "Tile digits high→low, 5 digits. Last byte always blank (36=0)."
     },
     "dkong": {
         "lives_addr": "0x6228",
