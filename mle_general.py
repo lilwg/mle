@@ -652,6 +652,23 @@ class MamePixelEnv(gym.Env):
                             self._lives_addr = self._scanner.found_lives_addr
                         self._bootstrapped = True
                         print("[bootstrap] Switching to RAM-based reward!")
+                        # Save to game_configs.json for next time
+                        import json as _json
+                        cfg_path = os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            "game_configs.json")
+                        cfgs = {}
+                        if os.path.exists(cfg_path):
+                            with open(cfg_path) as _f:
+                                cfgs = _json.load(_f)
+                        if self.game_id not in cfgs:
+                            entry = {"score_addrs": [f"0x{a:04X}" for a in self._score_addrs]}
+                            if self._lives_addr:
+                                entry["lives_addr"] = f"0x{self._lives_addr:04X}"
+                            cfgs[self.game_id] = entry
+                            with open(cfg_path, 'w') as _f:
+                                _json.dump(cfgs, _f, indent=4)
+                            print(f"[bootstrap] Saved to game_configs.json")
                     # Restart MAME (with new addrs if found)
                     self._start_mame()
                 except Exception as e:
