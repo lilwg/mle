@@ -34,7 +34,7 @@
         "notes": "Two BCD bytes: score = BCD(hi_byte)*1000 + BCD(lo_byte)*10."
     },
     "digdug": {
-        "score_addrs": ["0x89E0", "0x89E1"],
+        "score_addrs": ["0x89E9", "0x89EA"],
         "encoding": "bcd",
         "lives_addr": "0x840A",
         "verified": "from ROM disassembly, needs validation"
