@@ -769,19 +769,18 @@ if __name__ == "__main__":
     parser.add_argument("--eval", type=str, default=None, help="Evaluate saved model")
     parser.add_argument("--save", type=str, default=None)
     parser.add_argument("--episodes", type=int, default=3)
-    parser.add_argument("--detect-score", action="store_true",
-                        help="Auto-detect score/lives RAM before training")
-    parser.add_argument("--bootstrap", action="store_true",
-                        help="Learn survival first, auto-detect RAM during play")
     parser.add_argument("--score-addr", type=str, default=None,
                         help="Manual score RAM address(es), comma-separated hex (e.g. 0x00BE)")
     parser.add_argument("--lives-addr", type=str, default=None,
                         help="Manual lives RAM address, hex (e.g. 0x0D00)")
+    parser.add_argument("--no-detect", action="store_true",
+                        help="Skip auto-detection, use pixel reward only")
     args = parser.parse_args()
 
     save_path = args.save or f"{args.game}_{args.model}"
     score_addrs, lives_addr = [], None
 
+    # 1. Manual override
     if args.score_addr:
         score_addrs = [int(a.strip(), 16) for a in args.score_addr.split(",")]
         print(f"Using manual score addresses: {[f'${a:04X}' for a in score_addrs]}")
@@ -789,7 +788,7 @@ if __name__ == "__main__":
         lives_addr = int(args.lives_addr, 16)
         print(f"Using manual lives address: ${lives_addr:04X}")
 
-    # Check known game configs
+    # 2. Check known game configs
     if not score_addrs:
         import json
         config_path = os.path.join(os.path.dirname(__file__), "game_configs.json")
@@ -801,17 +800,16 @@ if __name__ == "__main__":
                 score_addrs = [int(a, 16) for a in cfg.get("score_addrs", [])]
                 if not lives_addr and "lives_addr" in cfg:
                     lives_addr = int(cfg["lives_addr"], 16)
-                print(f"[{args.game}] Loaded known config: "
-                      f"score={[f'${a:04X}' for a in score_addrs]}, "
-                      f"lives=${lives_addr:04X}" if lives_addr else "")
+                print(f"[{args.game}] Loaded config: "
+                      f"score={[f'${a:04X}' for a in score_addrs]}"
+                      f"{f', lives=${lives_addr:04X}' if lives_addr else ''}")
 
-    # Auto-detect as last resort
-    if args.detect_score and not score_addrs:
-        score_addrs, lives_addr = detect_score_ram(args.game)
+    # 3. Auto-detect if nothing found (unless --no-detect)
+    bootstrap = not score_addrs and not args.no_detect
 
     if args.eval:
         evaluate(args.game, args.model, args.eval, args.episodes,
                  score_addrs, lives_addr)
     else:
         train(args.game, args.model, args.timesteps, save_path,
-              score_addrs, lives_addr, bootstrap=args.bootstrap)
+              score_addrs, lives_addr, bootstrap=bootstrap)
