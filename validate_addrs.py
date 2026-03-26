@@ -2,6 +2,8 @@
 
   python3 validate_addrs.py galaga           # find addresses
   python3 validate_addrs.py qbert --validate # verify known addresses
+
+FIND: One game, you play, type your score 3 times, it scans ALL RAM.
 """
 
 import sys
@@ -16,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mle import MameEnv
 
 ROMS_PATH = "/Users/pat/mame/roms"
-MAX_PIPE_ADDRS = 400  # safe limit for pipe protocol
 
 
 def get_ram_ranges(game_id):
@@ -59,87 +60,100 @@ def byte_matches_score(val, score_val):
 
 def find_mode(game_id):
     ranges = get_ram_ranges(game_id)
+    total = sum(e - s for s, e in ranges)
 
-    # Split into pipe-safe chunks
-    chunks = []
-    for rs, re in ranges:
-        for cs in range(rs, re, MAX_PIPE_ADDRS):
-            chunks.append((cs, min(cs + MAX_PIPE_ADDRS, re)))
+    print(f"[{game_id}] FIND MODE — {total} bytes to scan")
+    print(f"  One game. Play, type score, repeat 3x, type 'done'.\n")
 
-    total = sum(e - s for s, e in chunks)
-    print(f"[{game_id}] FIND MODE — {total} RAM bytes, {len(chunks)} chunks")
-    print(f"  For each chunk: game restarts, you play to a score, type it.")
-    print(f"  Need 2+ different scores per chunk. Type 'next' to advance.\n")
+    sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
+    time.sleep(0.5)
 
-    all_results = {}  # addr -> [(score, val, encoding)]
+    env = MameEnv(ROMS_PATH, game_id, {"_dummy": 0},
+                  render=True, sound=False, throttle=True)
 
-    for ci, (cs, ce) in enumerate(chunks):
-        sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
-        time.sleep(0.5)
+    # Pump keeps MAME running
+    latest = [None]
+    running = [True]
+    def pump():
+        while running[0]:
+            try:
+                latest[0] = env.step()
+            except Exception:
+                break
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
 
-        ram_dict = {f"r{a:04x}": a for a in range(cs, ce)}
-        env = MameEnv(ROMS_PATH, game_id, ram_dict,
-                      render=True, sound=False, throttle=True)
+    print(f"  5=coin, 1=start. Play and type your score.\n")
 
-        latest = [None]
-        running = [True]
-        def pump():
+    samples = []
+    while True:
+        user = input(f"  Score #{len(samples)+1} (or 'done'): ").strip()
+        if user.lower() == 'done':
+            break
+        try:
+            score_val = int(user)
+        except ValueError:
+            print("    Enter a number or 'done'")
+            continue
+
+        # Stop pump, read ALL RAM via env.read_ram(), restart pump
+        running[0] = False
+        t.join(timeout=2)
+
+        print(f"    Reading RAM...", end=" ", flush=True)
+        ram = {}
+        for rs, re in ranges:
+            vals = env.read_ram(rs, re - rs)
+            for i, v in enumerate(vals):
+                ram[rs + i] = v
+        print(f"{len(ram)} bytes")
+        samples.append((score_val, ram))
+
+        running[0] = True
+        def pump2():
             while running[0]:
                 try:
                     latest[0] = env.step()
                 except Exception:
                     break
-        t = threading.Thread(target=pump, daemon=True)
+        t = threading.Thread(target=pump2, daemon=True)
         t.start()
 
-        print(f"--- Chunk {ci+1}/{len(chunks)}: ${cs:04X}-${ce:04X} ---")
-        print(f"  5=coin, 1=start. Type score, 'next', or 'done'.")
-
-        chunk_samples = []
-        while True:
-            user = input("  > ").strip()
-            if user.lower() in ('next', 'done'):
-                break
-            try:
-                score_val = int(user)
-            except ValueError:
-                print("    Number, 'next', or 'done'")
-                continue
-
-            data = latest[0]
-            if data:
-                ram = {a: data.get(f"r{a:04x}", 0) for a in range(cs, ce)}
-                chunk_samples.append((score_val, ram))
-                print(f"    Got score={score_val}")
-
-        # Analyze this chunk
-        if len(chunk_samples) >= 2 and len(set(s for s, _ in chunk_samples)) >= 2:
-            for addr in range(cs, ce):
-                matches = []
-                for score_val, ram in chunk_samples:
-                    enc = byte_matches_score(ram.get(addr, 0), score_val)
-                    if enc:
-                        matches.append((score_val, ram.get(addr, 0), enc))
-                if (len(matches) == len(chunk_samples)
-                        and len(set(m[1] for m in matches)) >= 2):
-                    all_results[addr] = matches
-
-        running[0] = False
-        env.close()
-
-        if user.lower() == 'done':
-            break
-
+    running[0] = False
+    env.close()
     sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
 
-    if all_results:
-        print(f"\n{'='*60}")
-        print(f"Addresses where byte matches score:")
-        for addr, matches in sorted(all_results.items()):
+    if len(samples) < 2 or len(set(s for s, _ in samples)) < 2:
+        print("\nNeed 2+ different scores.")
+        return
+
+    # Find matching addresses
+    print(f"\n{'='*60}")
+    print(f"Analyzing {len(samples)} captures...")
+
+    all_addrs = set()
+    for _, ram in samples:
+        all_addrs.update(ram.keys())
+
+    consistent = {}
+    for addr in sorted(all_addrs):
+        matches = []
+        for score_val, ram in samples:
+            if addr not in ram:
+                break
+            enc = byte_matches_score(ram[addr], score_val)
+            if enc:
+                matches.append((score_val, ram[addr], enc))
+        if len(matches) == len(samples) and len(set(m[1] for m in matches)) >= 2:
+            consistent[addr] = matches
+
+    if consistent:
+        print(f"\nAddresses matching all scores:")
+        for addr, matches in sorted(consistent.items()):
             scores_str = " ".join(f"{s}→{v}" for s, v, _ in matches)
             print(f"  ${addr:04X}: {matches[0][2]} [{scores_str}]")
 
-        best = sorted(all_results.keys())[:4]
+        best = sorted(consistent.keys())[:4]
         result = {"score_addrs": [f"0x{a:04X}" for a in best], "verified": True}
 
         config_path = os.path.join(os.path.dirname(__file__), "game_configs.json")
@@ -154,7 +168,7 @@ def find_mode(game_id):
             json.dump(configs, f, indent=4)
         print(f"\nSaved to game_configs.json")
     else:
-        print(f"\nNo matches found in scanned chunks.")
+        print("\nNo matches found. Check that scores were exact.")
 
 
 def validate_mode(game_id):

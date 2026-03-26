@@ -264,6 +264,29 @@ class MameEnv:
         """Request pixel data on the next step()/wait() call."""
         self._want_frame = True
 
+    def read_ram(self, start, count):
+        """Bulk-read `count` bytes starting at `start` via Lua console.
+
+        This runs between frames and does NOT use the pipe protocol.
+        Call step() once before and after to keep MAME in sync.
+
+        Returns list of int values, or empty list on failure.
+        """
+        results = []
+        for chunk_start in range(start, start + count, 256):
+            chunk_count = min(256, start + count - chunk_start)
+            r = self.console.writeln_expect(
+                f'local t={{}};for a={chunk_start},{chunk_start + chunk_count - 1} do '
+                f't[#t+1]=mem:read_u8(a) end;print(table.concat(t,","))')
+            if r:
+                try:
+                    results.extend(int(v.strip()) for v in r.split(','))
+                except (ValueError, IndexError):
+                    results.extend([0] * chunk_count)
+            else:
+                results.extend([0] * chunk_count)
+        return results
+
     def close(self):
         if self._closed:
             return
