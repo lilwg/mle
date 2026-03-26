@@ -17,12 +17,16 @@ def find_mame():
     """Find MAME binary and data directory."""
     binary = shutil.which("mame")
     if not binary:
-        for p in ["/opt/homebrew/bin/mame", "/usr/local/bin/mame"]:
+        for p in ["/opt/homebrew/bin/mame", "/usr/local/bin/mame",
+                  "/usr/bin/mame", "/usr/games/mame",
+                  "/snap/bin/mame"]:
             if os.path.isfile(p) and os.access(p, os.X_OK):
                 binary = p
                 break
     if not binary:
-        raise FileNotFoundError("MAME not found. Install via: brew install mame")
+        raise FileNotFoundError(
+            "MAME not found. Install via: brew install mame (Mac) "
+            "or apt install mame (Linux)")
 
     bin_dir = os.path.dirname(os.path.abspath(binary))
     for candidate in [
