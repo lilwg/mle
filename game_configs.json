@@ -1,27 +1,58 @@
 {
     "qbert": {
         "score_addrs": ["0x00BE"],
-        "lives_addr": "0x0D00",
-        "notes": "Score is single byte at $00BE. Lives at $0D00."
+        "lives_addr": "0x0D00"
     },
     "pacman": {
         "score_addrs": ["0x4E80", "0x4E81", "0x4E82"],
-        "lives_addr": "0x4E14",
-        "notes": "3-byte BCD score. Lives at $4E14."
+        "lives_addr": "0x4E14"
+    },
+    "mspacman": {
+        "score_addrs": ["0x4E80", "0x4E81", "0x4E82"],
+        "lives_addr": "0x4E14"
     },
     "dkong": {
         "score_addrs": ["0x6007", "0x6008", "0x6009"],
-        "lives_addr": "0x6001",
-        "notes": "3-byte BCD score. Lives at $6001."
+        "lives_addr": "0x6001"
     },
     "galaga": {
         "score_addrs": ["0x83F3", "0x83F4", "0x83F5"],
-        "lives_addr": "0x9820",
-        "notes": "3-byte BCD score. Lives at $9820."
+        "lives_addr": "0x9820"
+    },
+    "digdug": {
+        "score_addrs": ["0x8380", "0x8381", "0x8382"],
+        "lives_addr": "0x8349"
     },
     "frogger": {
         "score_addrs": ["0x83EC", "0x83ED"],
-        "lives_addr": "0x83E8",
-        "notes": "2-byte BCD score. Lives at $83E8."
+        "lives_addr": "0x83E8"
+    },
+    "joust": {
+        "score_addrs": ["0x0082", "0x0083", "0x0084"],
+        "lives_addr": "0x007E"
+    },
+    "defender": {
+        "score_addrs": ["0xC33E", "0xC33F", "0xC340"],
+        "lives_addr": "0xC342"
+    },
+    "robotron": {
+        "score_addrs": ["0xC33E", "0xC33F", "0xC340"],
+        "lives_addr": "0xC342"
+    },
+    "asteroid": {
+        "score_addrs": ["0x001C", "0x001D"],
+        "lives_addr": "0x001B"
+    },
+    "berzerk": {
+        "score_addrs": ["0x000C", "0x000D", "0x000E"],
+        "lives_addr": "0x000B"
+    },
+    "centiped": {
+        "score_addrs": ["0x0008", "0x0009", "0x000A", "0x000B"],
+        "lives_addr": "0x0016"
+    },
+    "missile": {
+        "score_addrs": ["0x0350", "0x0351", "0x0352", "0x0353"],
+        "lives_addr": "0x036C"
     }
 }
