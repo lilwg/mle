@@ -2,7 +2,26 @@
     "qbert": {
         "score_addrs": ["0x00BE", "0x00BF"],
         "lives_addr": "0x0D00",
-        "verified": true,
-        "notes": "16-bit little-endian score. $00BE=low byte, $00BF=high byte."
+        "verified": true
+    },
+    "galaga": {
+        "lives_addr": "0x9820",
+        "verified": "lives only, from cheat DB"
+    },
+    "dkong": {
+        "lives_addr": "0x6228",
+        "verified": "lives only, from cheat DB"
+    },
+    "frogger": {
+        "lives_addr": "0x83E5",
+        "verified": "lives only, from cheat DB"
+    },
+    "digdug": {
+        "lives_addr": "0x840A",
+        "verified": "lives only, from cheat DB"
+    },
+    "joust": {
+        "lives_addr": "0xA051",
+        "verified": "lives only, from cheat DB (16-bit)"
     }
 }
