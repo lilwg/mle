@@ -2,34 +2,29 @@
     "qbert": {
         "score_addrs": ["0x00BE"],
         "lives_addr": "0x0D00",
-        "verified": true,
-        "notes": "Confirmed via OCR+RAM match and ROM disassembly"
+        "verified": true
     },
     "galaga": {
         "score_addrs": ["0x83ED", "0x83EE", "0x83EF", "0x83F0", "0x83F1"],
         "lives_addr": "0x9820",
         "encoding": "tile",
-        "verified": true,
-        "notes": "Tile map digits (0-9). Write-verify confirmed. Read as individual digits."
+        "verified": true
     },
     "digdug": {
         "score_addrs": ["0x8402", "0x8403", "0x8404", "0x8405", "0x8406", "0x8407"],
         "lives_addr": "0x8349",
         "encoding": "tile",
-        "verified": false,
-        "notes": "Tile map digits. Needs verification."
+        "verified": "partial, lives=2 confirmed"
     },
     "dkong": {
         "score_addrs": ["0x6007", "0x6008", "0x6009"],
-        "lives_addr": "0x6001",
-        "verified": false,
-        "notes": "From MAME cheat community. Needs verification."
+        "lives_addr": "0x6020",
+        "verified": "partial, lives=3 confirmed, score bytes change during play"
     },
     "frogger": {
         "score_addrs": ["0x83EC", "0x83ED"],
         "lives_addr": "0x83E8",
-        "verified": false,
-        "notes": "From MAME cheat community. Needs verification."
+        "verified": false
     },
     "pacman": {
         "score_addrs": ["0x4E80", "0x4E81", "0x4E82"],
