@@ -73,7 +73,7 @@ def find_mode(game_id):
     time.sleep(0.5)
 
     env = MameEnv(ROMS_PATH, game_id, ram_dict,
-                  render=True, sound=False, throttle=True)
+                  render=True, sound=True, throttle=True)
 
     latest = [None]
     running = [True]
