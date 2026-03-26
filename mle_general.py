@@ -606,10 +606,15 @@ class MamePixelEnv(gym.Env):
                     digit = (raw & 0x0F) if self._score_encoding == "tile_mask" else raw
                     if 0 <= digit <= 9:
                         score = score * 10 + digit
-            elif self._score_encoding == "bcd100":
-                # Single BCD byte: score = ((hi_nibble*10) + lo_nibble) * 100
-                raw = data.get("_score0", 0)
-                score = (((raw >> 4) & 0xF) * 10 + (raw & 0xF)) * 100
+            elif self._score_encoding == "bcd10":
+                # BCD bytes, each = 2 decimal digits, multiply by 10
+                # e.g. [0x01, 0x12] = 01*1000 + 12*10 = 1120
+                score = 0
+                for i in range(len(self._score_addrs)):
+                    raw = data.get(f"_score{i}", 0)
+                    bcd = ((raw >> 4) & 0xF) * 10 + (raw & 0xF)
+                    score = score * 100 + bcd
+                score *= 10
             else:
                 # Default: little-endian multi-byte (BCD or raw)
                 score = sum(data.get(f"_score{i}", 0) << (8 * i)
