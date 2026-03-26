@@ -20,8 +20,10 @@
         "notes": "Tile digits high\u2192low, 5 digits. Last byte always blank (36=0)."
     },
     "dkong": {
+        "score_addrs": ["0x60B3"],
+        "encoding": "bcd100",
         "lives_addr": "0x6228",
-        "verified": "lives only, from cheat DB"
+        "verified": "testing"
     },
     "frogger": {
         "score_addrs": [
@@ -34,7 +36,10 @@
         "notes": "Two BCD bytes: score = BCD(hi_byte)*1000 + BCD(lo_byte)*10."
     },
     "digdug": {
-        "score_addrs": ["0x8412", "0x841E"],
+        "score_addrs": [
+            "0x8412",
+            "0x841E"
+        ],
         "encoding": "digdug",
         "lives_addr": "0x840A",
         "verified": "testing",
