@@ -179,8 +179,18 @@ class BootstrapScanner:
 
 def discover_inputs(game_id):
     """Discover game inputs from MAME XML metadata."""
+    import shutil
+    mame_bin = shutil.which("mame")
+    if not mame_bin:
+        for p in ["/opt/homebrew/bin/mame", "/usr/games/mame",
+                  "/usr/local/bin/mame", "/usr/bin/mame"]:
+            if os.path.isfile(p):
+                mame_bin = p
+                break
+    if not mame_bin:
+        return 4, 0  # default: 4-way joystick, no buttons
     result = subprocess.run(
-        ["/opt/homebrew/bin/mame", game_id, "-listxml"],
+        [mame_bin, game_id, "-listxml"],
         capture_output=True, text=True, timeout=10,
     )
     tree = ET.fromstring(result.stdout)
@@ -937,13 +947,14 @@ if __name__ == "__main__":
                       f"{f', lives=${lives_addr:04X}' if lives_addr else ''}"
                       f"{f', encoding={score_encoding}' if score_encoding else ''}")
 
-    # 3. Quick verify: write to RAM and check if display changes
-    if score_addrs:
-        verified = verify_addrs(args.game, score_addrs, lives_addr)
-        if verified:
-            print(f"[{args.game}] Score addresses verified")
-        # Not all games show score via direct tile mapping,
-        # so failed verification doesn't mean wrong addresses
+    # 3. Quick verify (skip if --no-detect or headless environment)
+    if score_addrs and not args.no_detect:
+        try:
+            verified = verify_addrs(args.game, score_addrs, lives_addr)
+            if verified:
+                print(f"[{args.game}] Score addresses verified")
+        except Exception:
+            pass  # verify requires render=True, skip on headless
 
     # 4. Auto-detect if nothing found (unless --no-detect)
     bootstrap = not score_addrs and not args.no_detect
