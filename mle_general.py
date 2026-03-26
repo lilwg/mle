@@ -415,7 +415,8 @@ class MamePixelEnv(gym.Env):
     """General MAME pixel-based gymnasium environment."""
 
     def __init__(self, game_id, render=False, throttle=False,
-                 score_addrs=None, lives_addr=None, bootstrap=False):
+                 score_addrs=None, lives_addr=None, score_encoding=None,
+                 bootstrap=False):
         super().__init__()
         self.game_id = game_id
         self._render = render
@@ -427,6 +428,7 @@ class MamePixelEnv(gym.Env):
         self._prev_frame = None
         self._score_addrs = score_addrs or []
         self._lives_addr = lives_addr
+        self._score_encoding = score_encoding or "raw"
         self._prev_score = 0
         self._prev_lives = 0
         self._prev_ocr_score = 0
@@ -596,8 +598,18 @@ class MamePixelEnv(gym.Env):
 
         # Layer 1: RAM score (best signal, if addresses known)
         if self._score_addrs:
-            score = sum(data.get(f"_score{i}", 0) << (8 * i)
-                        for i in range(len(self._score_addrs)))
+            if self._score_encoding == "tile":
+                # Each byte is a single digit (0-9), first addr = highest digit
+                score = 0
+                for i in range(len(self._score_addrs)):
+                    digit = data.get(f"_score{i}", 0)
+                    if 0 <= digit <= 9:
+                        score = score * 10 + digit
+                    # tile value > 9 = blank/letter, treat as 0
+            else:
+                # Default: little-endian multi-byte (BCD or raw)
+                score = sum(data.get(f"_score{i}", 0) << (8 * i)
+                            for i in range(len(self._score_addrs)))
             delta = score - self._prev_score
             if delta > 0:
                 reward += min(delta / 100.0, 10.0)
@@ -807,10 +819,11 @@ def verify_addrs(game_id, score_addrs, lives_addr=None):
 
 
 def train(game_id, model_name, timesteps, save_path,
-          score_addrs=None, lives_addr=None, bootstrap=False):
+          score_addrs=None, lives_addr=None, score_encoding=None,
+          bootstrap=False):
     env = MamePixelEnv(game_id, render=False, throttle=False,
                        score_addrs=score_addrs, lives_addr=lives_addr,
-                       bootstrap=bootstrap)
+                       score_encoding=score_encoding, bootstrap=bootstrap)
     model = make_model(model_name, env)
     reward_src = "score RAM" if score_addrs else "pixel heuristic"
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
@@ -857,6 +870,7 @@ if __name__ == "__main__":
 
     save_path = args.save or f"{args.game}_{args.model}"
     score_addrs, lives_addr = [], None
+    score_encoding = None
 
     # 1. Manual override
     if args.score_addr:
@@ -878,9 +892,11 @@ if __name__ == "__main__":
                 score_addrs = [int(a, 16) for a in cfg.get("score_addrs", [])]
                 if not lives_addr and "lives_addr" in cfg:
                     lives_addr = int(cfg["lives_addr"], 16)
+                score_encoding = cfg.get("encoding")
                 print(f"[{args.game}] Loaded config: "
                       f"score={[f'${a:04X}' for a in score_addrs]}"
-                      f"{f', lives=${lives_addr:04X}' if lives_addr else ''}")
+                      f"{f', lives=${lives_addr:04X}' if lives_addr else ''}"
+                      f"{f', encoding={score_encoding}' if score_encoding else ''}")
 
     # 3. Quick verify: write to RAM and check if display changes
     if score_addrs:
@@ -898,4 +914,5 @@ if __name__ == "__main__":
                  score_addrs, lives_addr)
     else:
         train(args.game, args.model, args.timesteps, save_path,
-              score_addrs, lives_addr, bootstrap=bootstrap)
+              score_addrs, lives_addr, score_encoding=score_encoding,
+              bootstrap=bootstrap)
