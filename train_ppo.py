@@ -64,7 +64,7 @@ def main():
             ent_coef=0.01,
             verbose=1,
             # tensorboard_log="./tb_logs/",
-            device="cpu",         # MPS has issues with SB3; CPU is fine for small MLPs
+            device="auto",        # Uses CUDA > MPS > CPU automatically
             policy_kwargs=dict(
                 net_arch=[128, 128],
             ),

@@ -755,7 +755,19 @@ def make_model(model_name, env):
     module_name, class_name, policy, kwargs = MODELS[model_name]
     mod = importlib.import_module(module_name)
     cls = getattr(mod, class_name)
-    return cls(policy, env, verbose=1, device="cpu", **kwargs)
+    import torch
+    # CNN policies benefit from GPU; MLP is faster on CPU
+    if "Cnn" in policy:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    else:
+        device = "cpu"
+    print(f"Using device: {device}")
+    return cls(policy, env, verbose=1, device=device, **kwargs)
 
 
 def load_model(model_name, path):
