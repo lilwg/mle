@@ -298,6 +298,10 @@ def validate_mode(game_id):
             if encoding in ("tile", "tile_mask"):
                 digits = [(v & 0x0F) if encoding == "tile_mask" else v for v in vals]
                 score = sum(d * (10 ** (len(digits)-1-i)) for i, d in enumerate(digits) if 0 <= d <= 9)
+            elif encoding == "bcd":
+                score = 0
+                for v in vals:
+                    score = score * 100 + ((v >> 4) & 0xF) * 10 + (v & 0xF)
             elif encoding == "bcd10":
                 score = 0
                 for v in vals:

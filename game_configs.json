@@ -34,13 +34,10 @@
         "notes": "Two BCD bytes: score = BCD(hi_byte)*1000 + BCD(lo_byte)*10."
     },
     "digdug": {
-        "score_addrs": [
-            "0x8411",
-            "0x8414",
-            "0x89EF"
-        ],
-        "verified": true,
-        "lives_addr": "0x840A"
+        "score_addrs": ["0x89E0", "0x89E1"],
+        "encoding": "bcd",
+        "lives_addr": "0x840A",
+        "verified": "from ROM disassembly, needs validation"
     },
     "joust": {
         "lives_addr": "0xA051",
