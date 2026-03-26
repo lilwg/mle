@@ -49,10 +49,19 @@ def byte_matches_score(val, score_val):
         bcd = ((val >> 4) * 10) + (val & 0xF)
         if bcd == score_val and score_val <= 99:
             return "BCD"
+        # BCD low pair: e.g. score 1370 → low BCD byte = 0x70 (=70)
+        if bcd == score_val % 100:
+            return "BCD-lo"
+        # BCD high pair: e.g. score 1370 → high BCD byte = 0x13 (=13)
+        if bcd == score_val // 100 and score_val >= 100:
+            return "BCD-hi"
     if score_val <= 0xFFFF and (score_val & 0xFF) == val:
         return "16bit-lo"
     if score_val > 255 and score_val <= 0xFFFF and ((score_val >> 8) & 0xFF) == val:
         return "16bit-hi"
+    # Score divided by 10 (some games store score/10)
+    if score_val >= 10 and val == score_val // 10 and score_val // 10 <= 255:
+        return "raw/10"
     return None
 
 
