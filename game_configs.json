@@ -24,12 +24,8 @@
         "verified": "lives only, from cheat DB"
     },
     "frogger": {
-        "score_addrs": [
-            "0x83ED"
-        ],
         "lives_addr": "0x83E5",
-        "verified": true,
-        "notes": "Single byte that increases monotonically with score. Not exact value but good for reward delta."
+        "verified": "lives only"
     },
     "digdug": {
         "lives_addr": "0x840A",
