@@ -24,8 +24,10 @@
         "verified": "lives only, from cheat DB"
     },
     "frogger": {
+        "score_addrs": ["0x83ED"],
         "lives_addr": "0x83E5",
-        "verified": "lives only"
+        "verified": true,
+        "notes": "Raw byte, strictly increasing with score. Value != display score but delta is correct for reward."
     },
     "digdug": {
         "lives_addr": "0x840A",
