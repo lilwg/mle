@@ -36,8 +36,8 @@ def get_ram_ranges(game_id):
     if '8088' in cpu_str or '8086' in cpu_str:
         return [(0x0000, 0x2000)]
     elif 'z80' in cpu_str:
-        return [(0x0000, 0x1000), (0x4000, 0x5000),
-                (0x6000, 0x7000), (0x8000, 0xA000), (0xC000, 0xD000)]
+        # Scan full 64K — some games have RAM in unexpected places
+        return [(0x0000, 0x10000)]
     else:
         return [(0x0000, 0x2000), (0x8000, 0xA000)]
 

@@ -34,8 +34,13 @@
         "notes": "Two BCD bytes: score = BCD(hi_byte)*1000 + BCD(lo_byte)*10."
     },
     "digdug": {
-        "lives_addr": "0x840A",
-        "verified": "lives only"
+        "score_addrs": [
+            "0x8411",
+            "0x8414",
+            "0x89EF"
+        ],
+        "verified": true,
+        "lives_addr": "0x840A"
     },
     "joust": {
         "lives_addr": "0xA051",
