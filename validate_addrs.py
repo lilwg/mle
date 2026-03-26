@@ -2,8 +2,6 @@
 
   python3 validate_addrs.py galaga           # find addresses
   python3 validate_addrs.py qbert --validate # verify known addresses
-
-FIND: One game, you play, type your score 3 times, it scans ALL RAM.
 """
 
 import sys
@@ -60,18 +58,23 @@ def byte_matches_score(val, score_val):
 
 def find_mode(game_id):
     ranges = get_ram_ranges(game_id)
-    total = sum(e - s for s, e in ranges)
 
-    print(f"[{game_id}] FIND MODE — {total} bytes to scan")
-    print(f"  One game. Play, type score, repeat 3x, type 'done'.\n")
+    # Put ALL addresses in the pipe — tested: 24K works fine
+    ram_dict = {}
+    for rs, re in ranges:
+        for a in range(rs, re):
+            ram_dict[f"r{a:04x}"] = a
+    total = len(ram_dict)
+
+    print(f"[{game_id}] FIND MODE — reading {total} RAM bytes every frame")
+    print(f"  One game. Play, type score 3x, type 'done'.\n")
 
     sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
     time.sleep(0.5)
 
-    env = MameEnv(ROMS_PATH, game_id, {"_dummy": 0},
+    env = MameEnv(ROMS_PATH, game_id, ram_dict,
                   render=True, sound=False, throttle=True)
 
-    # Pump keeps MAME running
     latest = [None]
     running = [True]
     def pump():
@@ -96,28 +99,18 @@ def find_mode(game_id):
             print("    Enter a number or 'done'")
             continue
 
-        # Stop pump, read ALL RAM via env.read_ram(), restart pump
-        running[0] = False
-        t.join(timeout=2)
-
-        print(f"    Reading RAM...", end=" ", flush=True)
-        ram = {}
-        for rs, re in ranges:
-            vals = env.read_ram(rs, re - rs)
-            for i, v in enumerate(vals):
-                ram[rs + i] = v
-        print(f"{len(ram)} bytes")
-        samples.append((score_val, ram))
-
-        running[0] = True
-        def pump2():
-            while running[0]:
-                try:
-                    latest[0] = env.step()
-                except Exception:
-                    break
-        t = threading.Thread(target=pump2, daemon=True)
-        t.start()
+        # Just grab latest data — pump is always running, data is always fresh
+        data = latest[0]
+        if data:
+            ram = {}
+            for key, val in data.items():
+                if key.startswith("r"):
+                    addr = int(key[1:], 16)
+                    ram[addr] = val
+            samples.append((score_val, ram))
+            print(f"    Captured score={score_val} ({len(ram)} bytes)")
+        else:
+            print("    No data yet, try again")
 
     running[0] = False
     env.close()
