@@ -79,8 +79,11 @@ def find_mode(game_id):
 
     for chunk_idx, (chunk_start, chunk_end) in enumerate(chunks):
         ram_dict = {f"r{a:04x}": a for a in range(chunk_start, chunk_end)}
+        import subprocess as sp
+        sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
+        time.sleep(0.5)
         env = MameEnv(ROMS_PATH, game_id, ram_dict,
-                      render=True, sound=True, throttle=True)
+                      render=True, sound=False, throttle=True)
 
         # Pump thread
         latest = [None]
