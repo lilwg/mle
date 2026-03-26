@@ -278,6 +278,9 @@ def validate_mode(game_id):
             if encoding in ("tile", "tile_mask"):
                 digits = [(v & 0x0F) if encoding == "tile_mask" else v for v in vals]
                 score = sum(d * (10 ** (len(digits)-1-i)) for i, d in enumerate(digits) if 0 <= d <= 9)
+            elif encoding == "bcd100":
+                raw = vals[0] if vals else 0
+                score = (((raw >> 4) & 0xF) * 10 + (raw & 0xF)) * 100
             else:
                 score = sum(v << (8*i) for i, v in enumerate(vals))
             lives = data.get("lives", "?")

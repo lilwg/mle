@@ -25,9 +25,10 @@
     },
     "frogger": {
         "score_addrs": ["0x83ED"],
+        "encoding": "bcd100",
         "lives_addr": "0x83E5",
-        "verified": true,
-        "notes": "Raw byte, strictly increasing with score. Value != display score but delta is correct for reward."
+        "verified": "needs screen confirmation",
+        "notes": "BCD byte: score = ((val>>4)*10 + (val&0xF)) * 100. Confirmed for scores 100-1800."
     },
     "digdug": {
         "lives_addr": "0x840A",
