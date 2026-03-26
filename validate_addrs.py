@@ -326,6 +326,9 @@ def validate_mode(game_id):
                 score = 0
                 for v in vals:
                     score = score * 100 + ((v >> 4) & 0xF) * 10 + (v & 0xF)
+            elif encoding == "digdug":
+                b0, b1 = (vals + [0, 0])[:2]
+                score = (((b0 >> 4) & 0xF) * 10 + (b0 & 0xF)) * 100 + b1 * 10
             elif encoding == "bcd100":
                 score = 0
                 for v in vals:

@@ -34,11 +34,11 @@
         "notes": "Two BCD bytes: score = BCD(hi_byte)*1000 + BCD(lo_byte)*10."
     },
     "digdug": {
-        "score_addrs": ["0x8412"],
-        "encoding": "bcd100",
+        "score_addrs": ["0x8412", "0x841E"],
+        "encoding": "digdug",
         "lives_addr": "0x840A",
         "verified": "testing",
-        "notes": "$8412 holds BCD of score/100. score = BCD($8412)*100. Tens digit at $841E not included."
+        "notes": "score = BCD($8412)*100 + $841E*10. Custom encoding."
     },
     "joust": {
         "lives_addr": "0xA051",

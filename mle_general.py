@@ -612,6 +612,11 @@ class MamePixelEnv(gym.Env):
                 for i in range(len(self._score_addrs)):
                     raw = data.get(f"_score{i}", 0)
                     score = score * 100 + ((raw >> 4) & 0xF) * 10 + (raw & 0xF)
+            elif self._score_encoding == "digdug":
+                # Custom: BCD(byte0)*100 + byte1*10
+                b0 = data.get("_score0", 0)
+                b1 = data.get("_score1", 0)
+                score = (((b0 >> 4) & 0xF) * 10 + (b0 & 0xF)) * 100 + b1 * 10
             elif self._score_encoding == "bcd100":
                 # BCD bytes, multiply final by 100
                 score = 0
