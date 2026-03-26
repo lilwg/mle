@@ -275,11 +275,20 @@ def main():
         img.save(f"/tmp/{args.game}_sample{sample_idx}.png")
 
         scores = ocr_score(frame)
-        if not scores:
-            print(f"  Sample {sample_idx + 1}: OCR found no numbers")
-            continue
+        if manual:
+            ocr_str = ", ".join(scores) if scores else "(nothing)"
+            correction = input(f"  OCR reads: {ocr_str}. Enter correct score (or press Enter to accept): ").strip()
+            if correction:
+                scores = [correction]
+            elif not scores:
+                print("  Skipping — no score detected.")
+                continue
+        else:
+            if not scores:
+                print(f"  Sample {sample_idx + 1}: OCR found no numbers")
+                continue
 
-        print(f"  Sample {sample_idx + 1}: OCR found {scores}")
+        print(f"  Sample {sample_idx + 1}: using {scores}")
         samples.append((scores, ram))
 
         # Restart pump thread for manual mode
