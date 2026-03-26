@@ -161,7 +161,20 @@ def find_mode(game_id):
         print(f"Analyzing {len(samples)} score samples...")
 
         # For each address, check if its value matches the score in each sample
-        from find_score_ram import byte_matches_score
+        def byte_matches_score(val, score_val):
+            """Check if a single byte could encode score_val."""
+            if val == score_val and score_val <= 255:
+                return "raw"
+            if (val >> 4) <= 9 and (val & 0xF) <= 9:
+                bcd = ((val >> 4) * 10) + (val & 0xF)
+                if bcd == score_val and score_val <= 99:
+                    return "BCD"
+            if score_val <= 0xFFFF and (score_val & 0xFF) == val:
+                return "16bit-lo"
+            if score_val <= 0xFFFF and ((score_val >> 8) & 0xFF) == val:
+                return "16bit-hi"
+            return None
+
         consistent = {}
         all_addrs = set()
         for _, ram in samples:
