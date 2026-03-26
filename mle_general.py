@@ -728,6 +728,84 @@ def load_model(model_name, path):
     return cls.load(path)
 
 
+def verify_addrs(game_id, score_addrs, lives_addr=None):
+    """Verify addresses by writing test values and checking screen change.
+
+    Starts MAME, saves state, writes 0x99 to each score address,
+    compares pixels. Returns True if any address changed the display.
+    """
+    import subprocess as sp
+    sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
+    time.sleep(0.5)
+
+    try:
+        ram = {"_dummy": 0}
+        for i, addr in enumerate(score_addrs):
+            ram[f"s{i}"] = addr
+        if lives_addr:
+            ram["lives"] = lives_addr
+
+        env = MameEnv(ROMS_PATH, game_id, ram,
+                      render=True, sound=False, throttle=False)
+
+        # Discover inputs via Lua
+        result = env.console.writeln_expect(
+            'local r={}; for p,port in pairs(manager.machine.ioport.ports) do '
+            'for f,field in pairs(port.fields) do '
+            'r[#r+1]=p.."~"..f end end; print(table.concat(r,";"))')
+        coin, start_btn = None, None
+        for pair in (result or '').split(';'):
+            if '~' not in pair:
+                continue
+            port, field = pair.split('~', 1)
+            fl = field.lower()
+            if 'coin' in fl:
+                coin = (port, field)
+            elif '1 player' in fl or ('start' in fl and '1' in fl):
+                start_btn = (port, field)
+        if coin:
+            env.step_n(*coin, 15)
+        env.wait(120)
+        if start_btn:
+            env.step_n(*start_btn, 5)
+        env.wait(300)
+
+        # Save state + reference frame
+        env.console.writeln('manager.machine:save("v")')
+        env.wait(3)
+        env.console.writeln('manager.machine:load("v")')
+        env.wait(1)
+        env.request_frame()
+        ref = env.step()['frame']
+        h = ref.shape[0]
+        # Write 0x99 to all score addresses
+        env.console.writeln('manager.machine:load("v")')
+        env.wait(1)
+        for addr in score_addrs:
+            env.console.writeln(f'mem:write_u8({addr}, 0x99)')
+        env.request_frame()
+        data = env.step()
+
+        env.close()
+        sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
+
+        if 'frame' not in data:
+            return False
+
+        # Compare full frame — score could be anywhere on screen
+        changed = np.sum(np.max(
+            np.abs(data['frame'].astype(int) - ref.astype(int)), axis=2) > 20)
+
+        if changed > 5:
+            print(f"[{game_id}] Verified: {changed} pixels changed")
+            return True
+        return False
+
+    except Exception as e:
+        sp.run(["pkill", "-9", "-f", f"mame.*{game_id}"], capture_output=True)
+        return False
+
+
 def train(game_id, model_name, timesteps, save_path,
           score_addrs=None, lives_addr=None, bootstrap=False):
     env = MamePixelEnv(game_id, render=False, throttle=False,
@@ -804,7 +882,15 @@ if __name__ == "__main__":
                       f"score={[f'${a:04X}' for a in score_addrs]}"
                       f"{f', lives=${lives_addr:04X}' if lives_addr else ''}")
 
-    # 3. Auto-detect if nothing found (unless --no-detect)
+    # 3. Quick verify: write to RAM and check if display changes
+    if score_addrs:
+        verified = verify_addrs(args.game, score_addrs, lives_addr)
+        if verified:
+            print(f"[{args.game}] Score addresses verified")
+        # Not all games show score via direct tile mapping,
+        # so failed verification doesn't mean wrong addresses
+
+    # 4. Auto-detect if nothing found (unless --no-detect)
     bootstrap = not score_addrs and not args.no_detect
 
     if args.eval:
