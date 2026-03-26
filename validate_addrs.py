@@ -117,11 +117,12 @@ def find_mode(game_id):
                     addr = int(key[1:], 16)
                     ram[addr] = val
             samples.append((score_val, ram))
-            # Show neighborhood of known candidate addresses
-            for probe in [0x83EE]:
-                nearby = [ram.get(probe + i, -1) for i in range(-20, 21)]
-                digits = [str(v) if 0 <= v <= 9 else '.' for v in nearby]
-                print(f"    Captured score={score_val} — near ${probe:04X}: {' '.join(digits)}")
+            # Show values at regular strides from $83EE (rotated screen = stride 32)
+            probe = 0x83EE
+            for stride in [1, 32]:
+                vals = [(probe + i*stride, ram.get(probe + i*stride, -1)) for i in range(-5, 6)]
+                parts = [f"{a:04X}={v}" if 0 <= v <= 9 else f"{a:04X}=." for a, v in vals]
+                print(f"    score={score_val} stride={stride}: {' '.join(parts)}")
         else:
             print("    No data yet, try again")
 
