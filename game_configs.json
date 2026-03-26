@@ -25,13 +25,11 @@
     },
     "frogger": {
         "score_addrs": [
-            "0x83EE",
             "0x83ED"
         ],
-        "encoding": "tile_mask",
-        "verified": "partial",
         "lives_addr": "0x83E5",
-        "notes": "2 digits: thousands and hundreds. digit = val & 0x0F. Scores multiples of 10."
+        "verified": true,
+        "notes": "Single byte that increases monotonically with score. Not exact value but good for reward delta."
     },
     "digdug": {
         "lives_addr": "0x840A",
