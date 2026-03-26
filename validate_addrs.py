@@ -123,12 +123,38 @@ def find_mode(game_id):
             print("    Enter a number or 'done'")
             continue
 
-        # Read ALL RAM via console while pump keeps running
-        # (MAME needs the pipe protocol active to process console commands)
+        # Pause pump, sync pipe, bulk read, restart pump
+        running[0] = False
+        t.join(timeout=2)
+
+        # Step once to sync the pipe (MAME writes data, we read+respond)
+        try:
+            env.step()
+        except Exception:
+            pass
+
         print(f"    Reading {total} RAM bytes...", end=" ", flush=True)
         ram = bulk_read_ram(env, ranges)
         print(f"got {len(ram)}")
         samples.append((score_val, ram))
+
+        # Step again to keep MAME alive before restarting pump
+        try:
+            env.step()
+        except Exception:
+            pass
+
+        running[0] = True
+        def make_pump():
+            def p():
+                while running[0]:
+                    try:
+                        latest[0] = env.step()
+                    except Exception:
+                        break
+            return p
+        t = threading.Thread(target=make_pump(), daemon=True)
+        t.start()
 
     running[0] = False
     env.close()
