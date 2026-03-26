@@ -17,15 +17,23 @@
         "encoding": "tile",
         "verified": true,
         "lives_addr": "0x9820",
-        "notes": "Tile digits high→low, 5 digits. Last byte always blank (36=0)."
+        "notes": "Tile digits high\u2192low, 5 digits. Last byte always blank (36=0)."
     },
     "dkong": {
         "lives_addr": "0x6228",
         "verified": "lives only, from cheat DB"
     },
     "frogger": {
+        "score_addrs": [
+            "0x83EE",
+            "0x83ED",
+            "0x83EC",
+            "0x83EB"
+        ],
+        "encoding": "tile_mask",
+        "verified": true,
         "lives_addr": "0x83E5",
-        "verified": "lives only, from cheat DB"
+        "notes": "Tile digits with palette in upper nibble. digit = val & 0x0F."
     },
     "digdug": {
         "lives_addr": "0x840A",

@@ -598,14 +598,15 @@ class MamePixelEnv(gym.Env):
 
         # Layer 1: RAM score (best signal, if addresses known)
         if self._score_addrs:
-            if self._score_encoding == "tile":
-                # Each byte is a single digit (0-9), first addr = highest digit
+            if self._score_encoding in ("tile", "tile_mask"):
+                # Each byte is a single digit, first addr = highest digit
                 score = 0
                 for i in range(len(self._score_addrs)):
-                    digit = data.get(f"_score{i}", 0)
+                    raw = data.get(f"_score{i}", 0)
+                    # tile_mask: digit in lower nibble (upper = palette)
+                    digit = (raw & 0x0F) if self._score_encoding == "tile_mask" else raw
                     if 0 <= digit <= 9:
                         score = score * 10 + digit
-                    # tile value > 9 = blank/letter, treat as 0
             else:
                 # Default: little-endian multi-byte (BCD or raw)
                 score = sum(data.get(f"_score{i}", 0) << (8 * i)

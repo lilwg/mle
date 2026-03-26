@@ -275,8 +275,9 @@ def validate_mode(game_id):
             if not data:
                 continue
             vals = [data.get(f"s{i}", 0) for i in range(len(score_addrs))]
-            if encoding == "tile":
-                score = sum(v * (10 ** (len(vals)-1-i)) for i, v in enumerate(vals) if 0 <= v <= 9)
+            if encoding in ("tile", "tile_mask"):
+                digits = [(v & 0x0F) if encoding == "tile_mask" else v for v in vals]
+                score = sum(d * (10 ** (len(digits)-1-i)) for i, d in enumerate(digits) if 0 <= d <= 9)
             else:
                 score = sum(v << (8*i) for i, v in enumerate(vals))
             lives = data.get("lives", "?")
