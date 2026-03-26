@@ -1,7 +1,8 @@
 {
     "qbert": {
-        "score_addrs": ["0x00BE"],
+        "score_addrs": ["0x00BE", "0x00BF"],
         "lives_addr": "0x0D00",
-        "verified": true
+        "verified": true,
+        "notes": "16-bit little-endian score. $00BE=low byte, $00BF=high byte."
     }
 }
