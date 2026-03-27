@@ -883,12 +883,13 @@ def train(game_id, model_name, timesteps, save_path,
           bootstrap=False, n_envs=1):
 
     def make_env(rank):
-        """Create a single env instance (for SubprocVecEnv)."""
+        """Create a single env instance wrapped in Monitor (for SubprocVecEnv)."""
         def _init():
+            from stable_baselines3.common.monitor import Monitor
             env = MamePixelEnv(game_id, render=False, throttle=False,
                                score_addrs=score_addrs, lives_addr=lives_addr,
                                score_encoding=score_encoding, bootstrap=bootstrap)
-            return env
+            return Monitor(env)
         return _init
 
     if n_envs > 1:
