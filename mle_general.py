@@ -869,14 +869,30 @@ def verify_addrs(game_id, score_addrs, lives_addr=None):
 
 def train(game_id, model_name, timesteps, save_path,
           score_addrs=None, lives_addr=None, score_encoding=None,
-          bootstrap=False):
-    env = MamePixelEnv(game_id, render=False, throttle=False,
-                       score_addrs=score_addrs, lives_addr=lives_addr,
-                       score_encoding=score_encoding, bootstrap=bootstrap)
+          bootstrap=False, n_envs=1):
+
+    def make_env(rank):
+        """Create a single env instance (for SubprocVecEnv)."""
+        def _init():
+            env = MamePixelEnv(game_id, render=False, throttle=False,
+                               score_addrs=score_addrs, lives_addr=lives_addr,
+                               score_encoding=score_encoding, bootstrap=bootstrap)
+            return env
+        return _init
+
+    if n_envs > 1:
+        from stable_baselines3.common.vec_env import SubprocVecEnv
+        env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
+        print(f"Running {n_envs} parallel MAME instances")
+    else:
+        env = MamePixelEnv(game_id, render=False, throttle=False,
+                           score_addrs=score_addrs, lives_addr=lives_addr,
+                           score_encoding=score_encoding, bootstrap=bootstrap)
+
     model = make_model(model_name, env)
     reward_src = "score RAM" if score_addrs else "pixel heuristic"
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
-          f"(reward: {reward_src})...")
+          f"(reward: {reward_src}, envs: {n_envs})...")
     model.learn(total_timesteps=timesteps)
     model.save(save_path)
     print(f"Saved to {save_path}")
@@ -915,6 +931,8 @@ if __name__ == "__main__":
                         help="Manual lives RAM address, hex (e.g. 0x0D00)")
     parser.add_argument("--no-detect", action="store_true",
                         help="Skip auto-detection, use pixel reward only")
+    parser.add_argument("--parallel", type=int, default=1,
+                        help="Number of parallel MAME instances (default: 1)")
     args = parser.parse_args()
 
     save_path = args.save or f"{args.game}_{args.model}"
@@ -965,4 +983,4 @@ if __name__ == "__main__":
     else:
         train(args.game, args.model, args.timesteps, save_path,
               score_addrs, lives_addr, score_encoding=score_encoding,
-              bootstrap=bootstrap)
+              bootstrap=bootstrap, n_envs=args.parallel)
