@@ -24,50 +24,84 @@ from mle_general import MamePixelEnv, ROMS_PATH, OBS_H, OBS_W, STACK_SIZE
 # Register MAME env with gymnasium
 class MameGymWrapper(gym.Env):
     """Wrap MamePixelEnv for sheeprl compatibility.
-    sheeprl expects obs as (H, W, C) uint8, not (C, H, W).
+    Returns (H, W, C) RGB observations. Handles pipe robustness.
     """
     metadata = {"render_modes": ["rgb_array"]}
     render_mode = "rgb_array"
 
     def __init__(self, game_id="frogger", **kwargs):
         super().__init__()
+        self.game_id = game_id
+        self._game_cfg = {}
         config_path = os.path.join(os.path.dirname(__file__), "game_configs.json")
-        score_addrs, lives_addr, score_encoding = [], None, None
         if os.path.exists(config_path):
             with open(config_path) as f:
                 configs = json.load(f)
             if game_id in configs:
-                cfg = configs[game_id]
-                score_addrs = [int(a, 16) for a in cfg.get("score_addrs", [])]
-                if "lives_addr" in cfg:
-                    lives_addr = int(cfg["lives_addr"], 16)
-                score_encoding = cfg.get("encoding")
+                self._game_cfg = configs[game_id]
 
+        # sheeprl wants (H, W, C) RGB
+        self.observation_space = spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8)
+        self._obs_shape = (64, 64, 3)
+        self.env = None
+        self._make_env()
+        self.action_space = self.env.action_space
+
+    def _make_env(self):
+        score_addrs = [int(a, 16) for a in self._game_cfg.get("score_addrs", [])]
+        lives_addr = int(self._game_cfg["lives_addr"], 16) if "lives_addr" in self._game_cfg else None
+        score_encoding = self._game_cfg.get("encoding")
+        if self.env is not None:
+            try:
+                self.env.close()
+            except Exception:
+                pass
+        import subprocess, time
+        subprocess.run(["pkill", "-9", "-f", f"mame.*{self.game_id}"],
+                       capture_output=True)
+        time.sleep(0.3)
         self.env = MamePixelEnv(
-            game_id, render=False, throttle=False,
+            self.game_id, render=False, throttle=False,
             score_addrs=score_addrs, lives_addr=lives_addr,
             score_encoding=score_encoding)
+        self.action_space = self.env.action_space
 
-        n_actions = self.env.action_space.n
-        self.action_space = spaces.Discrete(n_actions)
-        # sheeprl expects (H, W, C) observations
-        self.observation_space = spaces.Box(
-            0, 255, (OBS_H, OBS_W, STACK_SIZE), dtype=np.uint8)
+    def _to_rgb(self, obs):
+        """Convert (C, H, W) grayscale stack to (H, W, 3) RGB for sheeprl."""
+        from PIL import Image
+        # Take last frame from stack, resize to 64x64, convert to RGB
+        frame = obs[-1]  # (84, 84) uint8
+        img = Image.fromarray(frame).resize((64, 64), Image.BILINEAR)
+        gray = np.array(img, dtype=np.uint8)
+        return np.stack([gray, gray, gray], axis=-1)  # (64, 64, 3)
 
     def reset(self, seed=None, options=None):
-        obs, info = self.env.reset(seed=seed)
-        # (C, H, W) -> (H, W, C)
-        return obs.transpose(1, 2, 0), info
+        try:
+            obs, info = self.env.reset(seed=seed)
+        except Exception:
+            self._make_env()
+            obs, info = self.env.reset(seed=seed)
+        return self._to_rgb(obs), info
 
     def step(self, action):
-        obs, reward, term, trunc, info = self.env.step(action)
-        return obs.transpose(1, 2, 0), reward, term, trunc, info
+        try:
+            obs, reward, term, trunc, info = self.env.step(int(action))
+        except Exception:
+            # Pipe broke — restart
+            self._make_env()
+            obs, _ = self.env.reset()
+            return self._to_rgb(obs), -1.0, True, False, {}
+        return self._to_rgb(obs), float(reward), bool(term), bool(trunc), info
 
     def render(self):
-        return np.zeros((OBS_H, OBS_W, 3), dtype=np.uint8)
+        return np.zeros(self._obs_shape, dtype=np.uint8)
 
     def close(self):
-        self.env.close()
+        if self.env:
+            try:
+                self.env.close()
+            except Exception:
+                pass
 
 
 def main():
@@ -102,15 +136,22 @@ sys.argv = [
     "sheeprl",
     "exp=dreamer_v3",
     "env=gym",
+    "env.id=MameArcade-v0",
     "env.wrapper.id=MameArcade-v0",
     "env.wrapper.render_mode=rgb_array",
     "algo.total_steps={args.timesteps}",
     "algo.replay_ratio=0.5",
     "buffer.size=100000",
     "env.num_envs=1",
+    "env.capture_video=false",
+    "env.sync_env=true",
+    "env.screen_size=64",
+    "env.grayscale=false",
+    "env.frame_stack=1",
+    "env.action_repeat=1",
     "metric.log_every=1000",
     "checkpoint.every=50000",
-    "env.capture_video=false",
+    "algo.run_test=false",
 ]
 run()
 """
