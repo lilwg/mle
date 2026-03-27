@@ -571,6 +571,7 @@ class MamePixelEnv(gym.Env):
         self._steps = 0
         self._prev_score = 0
         self._prev_ocr_score = 0
+        self._last_score_change = 0
         # Read initial lives
         data = self.env.step()
         self._prev_lives = data.get("_lives", 0)
@@ -731,7 +732,15 @@ class MamePixelEnv(gym.Env):
         self._frame_stack = np.roll(self._frame_stack, -1, axis=0)
         self._frame_stack[-1] = processed
 
-        truncated = self._steps > 2000
+        # Truncate long episodes. Also detect "stuck" (no score change = game over/attract)
+        truncated = self._steps > 1000
+        if not terminated and self._steps > 200:
+            if not hasattr(self, '_last_score_change'):
+                self._last_score_change = 0
+            if reward > 0.2:
+                self._last_score_change = self._steps
+            elif self._steps - self._last_score_change > 300:
+                terminated = True  # no scoring for 300 steps = probably game over
         return self._frame_stack.copy(), reward, terminated, truncated, {}
 
     def close(self):
