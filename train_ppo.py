@@ -63,7 +63,7 @@ def main():
             clip_range=0.2,
             ent_coef=0.01,
             verbose=1,
-            # tensorboard_log="./tb_logs/",
+            tensorboard_log="./tb_logs/",
             device="auto",        # Uses CUDA > MPS > CPU automatically
             policy_kwargs=dict(
                 net_arch=[128, 128],

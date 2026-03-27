@@ -788,7 +788,8 @@ def make_model(model_name, env):
     else:
         device = "cpu"
     print(f"Using device: {device}")
-    return cls(policy, env, verbose=1, device=device, **kwargs)
+    return cls(policy, env, verbose=1, device=device,
+               tensorboard_log="./tb_logs/", **kwargs)
 
 
 def load_model(model_name, path):
