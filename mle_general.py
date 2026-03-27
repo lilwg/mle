@@ -657,10 +657,12 @@ class MamePixelEnv(gym.Env):
         # Layer 1b: RAM lives (if address known)
         if self._lives_addr:
             lives = data.get("_lives", 0)
-            if lives < self._prev_lives and self._prev_lives > 0:
-                reward -= 5.0
-            if lives == 0 and self._prev_lives > 0:
-                terminated = True
+            if lives != self._prev_lives and self._prev_lives > 0:
+                if lives < self._prev_lives or lives > 200:
+                    # Lost a life (or byte wrapped from 0→255)
+                    reward -= 10.0
+                    if lives == 0 or lives > 200:
+                        terminated = True  # game over
             self._prev_lives = lives
 
         # Layer 2: OCR score from pixels (if no RAM score)
@@ -729,7 +731,7 @@ class MamePixelEnv(gym.Env):
         self._frame_stack = np.roll(self._frame_stack, -1, axis=0)
         self._frame_stack[-1] = processed
 
-        truncated = self._steps > 5000
+        truncated = self._steps > 2000
         return self._frame_stack.copy(), reward, terminated, truncated, {}
 
     def close(self):
