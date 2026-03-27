@@ -741,7 +741,14 @@ class MamePixelEnv(gym.Env):
                 self._last_score_change = self._steps
             elif self._steps - self._last_score_change > 300:
                 terminated = True  # no scoring for 300 steps = probably game over
-        return self._frame_stack.copy(), reward, terminated, truncated, {}
+        # Game stats in info dict (wandb/Monitor picks these up)
+        info = {}
+        if terminated or truncated:
+            info["game_score"] = self._prev_score
+            info["game_steps"] = self._steps
+            info["game_duration_sec"] = self._steps * FRAME_SKIP / 60.0
+
+        return self._frame_stack.copy(), reward, terminated, truncated, info
 
     def close(self):
         if self.env:
@@ -907,12 +914,13 @@ def train(game_id, model_name, timesteps, save_path,
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
           f"(reward: {reward_src}, envs: {n_envs})...")
 
-    # Wandb logging
-    callback = None
+    # Wandb logging with game stats
+    callbacks = []
+    _wandb = None
     try:
-        import wandb
+        import wandb as _wandb
         from wandb.integration.sb3 import WandbCallback
-        run = wandb.init(
+        run = _wandb.init(
             project="mle-arcade",
             name=f"{game_id}-{model_name}-{timesteps//1000}k",
             config={
@@ -922,16 +930,35 @@ def train(game_id, model_name, timesteps, save_path,
             },
             sync_tensorboard=True,
         )
-        callback = WandbCallback(verbose=0)
+        callbacks.append(WandbCallback(verbose=0))
         print(f"Logging to Weights & Biases: {run.url}")
     except Exception as e:
         print(f"wandb not available: {e}")
 
-    model.learn(total_timesteps=timesteps, callback=callback)
+    # Custom callback to log game stats
+    from stable_baselines3.common.callbacks import BaseCallback
+    class GameStatsCallback(BaseCallback):
+        def _on_step(self):
+            infos = self.locals.get("infos", [])
+            for info in infos:
+                if "game_score" in info:
+                    score = info["game_score"]
+                    duration = info.get("game_duration_sec", 0)
+                    if _wandb and _wandb.run:
+                        _wandb.log({
+                            "game/score": score,
+                            "game/duration_sec": duration,
+                        }, step=self.num_timesteps)
+                    if self.num_timesteps % 10000 < 600:
+                        print(f"  Game over: score={score} duration={duration:.0f}s")
+            return True
+    callbacks.append(GameStatsCallback())
 
-    if callback:
+    model.learn(total_timesteps=timesteps, callback=callbacks)
+
+    if _wandb and _wandb.run:
         try:
-            wandb.finish()
+            _wandb.finish()
         except Exception:
             pass
     model.save(save_path)
