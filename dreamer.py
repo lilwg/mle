@@ -188,7 +188,7 @@ class ReplayBuffer:
 
 class DreamerAgent:
     def __init__(self, action_dim, device="cpu",
-                 latent_dim=64, state_dim=64, lr=3e-4):
+                 latent_dim=256, state_dim=256, lr=3e-4):
         self.device = device
         self.action_dim = action_dim
         self.latent_dim = latent_dim
@@ -434,9 +434,8 @@ def train(game_id, timesteps, save_path, n_envs=1):
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
-    # MPS is too slow for small-batch RNN training, use CPU
-    # elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    #     device = "mps"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
     print(f"Dreamer v3 on {device}")
 
     agent = DreamerAgent(env.action_space.n, device=device)
