@@ -906,7 +906,34 @@ def train(game_id, model_name, timesteps, save_path,
     reward_src = "score RAM" if score_addrs else "pixel heuristic"
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
           f"(reward: {reward_src}, envs: {n_envs})...")
-    model.learn(total_timesteps=timesteps)
+
+    # Wandb logging (if installed and configured)
+    callback = None
+    try:
+        import wandb
+        from wandb.integration.sb3 import WandbCallback
+        wandb.init(
+            project="mle-arcade",
+            name=f"{game_id}-{model_name}-{timesteps//1000}k",
+            config={
+                "game": game_id, "model": model_name, "timesteps": timesteps,
+                "n_envs": n_envs, "reward": reward_src,
+                "score_addrs": [f"0x{a:04X}" for a in (score_addrs or [])],
+            },
+            sync_tensorboard=True,
+        )
+        callback = WandbCallback(verbose=0)
+        print("Logging to Weights & Biases")
+    except Exception:
+        pass  # wandb not configured, continue without
+
+    model.learn(total_timesteps=timesteps, callback=callback)
+
+    if callback:
+        try:
+            wandb.finish()
+        except Exception:
+            pass
     model.save(save_path)
     print(f"Saved to {save_path}")
     env.close()
