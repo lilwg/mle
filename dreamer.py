@@ -373,13 +373,18 @@ class DreamerAgent:
         return {"ac/critic": critic_loss.item(),
                 "ac/actor": actor_loss.item()}
 
-    def train_step(self):
-        """One full training step: world model + actor-critic."""
-        self.train_steps += 1
+    def train_step(self, n_updates=8):
+        """Multiple training steps: world model + actor-critic."""
         stats = {}
-        stats.update(self.train_world_model())
-        if self.train_steps % 2 == 0:  # actor-critic every other step
-            stats.update(self.train_actor_critic())
+        for _ in range(n_updates):
+            self.train_steps += 1
+            s = self.train_world_model()
+            for k, v in s.items():
+                stats[k] = v  # keep last
+            if self.train_steps % 2 == 0:
+                s = self.train_actor_critic()
+                for k, v in s.items():
+                    stats[k] = v
         return stats
 
     def save(self, path):
