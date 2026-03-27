@@ -907,12 +907,12 @@ def train(game_id, model_name, timesteps, save_path,
     print(f"Training {game_id} with {model_name.upper()} for {timesteps} steps "
           f"(reward: {reward_src}, envs: {n_envs})...")
 
-    # Wandb logging (if installed and configured)
+    # Wandb logging
     callback = None
     try:
         import wandb
         from wandb.integration.sb3 import WandbCallback
-        wandb.init(
+        run = wandb.init(
             project="mle-arcade",
             name=f"{game_id}-{model_name}-{timesteps//1000}k",
             config={
@@ -923,9 +923,9 @@ def train(game_id, model_name, timesteps, save_path,
             sync_tensorboard=True,
         )
         callback = WandbCallback(verbose=0)
-        print("Logging to Weights & Biases")
-    except Exception:
-        pass  # wandb not configured, continue without
+        print(f"Logging to Weights & Biases: {run.url}")
+    except Exception as e:
+        print(f"wandb not available: {e}")
 
     model.learn(total_timesteps=timesteps, callback=callback)
 
