@@ -188,7 +188,7 @@ class ReplayBuffer:
 
 class DreamerAgent:
     def __init__(self, action_dim, device="cpu",
-                 latent_dim=128, state_dim=128, lr=3e-4):
+                 latent_dim=64, state_dim=64, lr=3e-4):
         self.device = device
         self.action_dim = action_dim
         self.latent_dim = latent_dim
@@ -241,7 +241,7 @@ class DreamerAgent:
             self.h = self.rssm.step(self.h, self.z, action_onehot)
             return action.item()
 
-    def train_world_model(self, batch_size=16, seq_len=32):
+    def train_world_model(self, batch_size=8, seq_len=16):
         """Train world model on replay buffer sequences."""
         data = self.buffer.sample_sequences(batch_size, seq_len)
         if data is None:
@@ -297,7 +297,7 @@ class DreamerAgent:
                 "wm/reward": reward_loss.item() / T,
                 "wm/continue": continue_loss.item() / T}
 
-    def train_actor_critic(self, horizon=15, batch_size=16):
+    def train_actor_critic(self, horizon=8, batch_size=8):
         """Train actor-critic on imagined trajectories."""
         data = self.buffer.sample_sequences(batch_size, 1)
         if data is None:
@@ -373,7 +373,7 @@ class DreamerAgent:
         return {"ac/critic": critic_loss.item(),
                 "ac/actor": actor_loss.item()}
 
-    def train_step(self, n_updates=8):
+    def train_step(self, n_updates=4):
         """Multiple training steps: world model + actor-critic."""
         stats = {}
         for _ in range(n_updates):
