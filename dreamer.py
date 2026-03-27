@@ -429,8 +429,9 @@ def train(game_id, timesteps, save_path, n_envs=1):
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
+    # MPS is too slow for small-batch RNN training, use CPU
+    # elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    #     device = "mps"
     print(f"Dreamer v3 on {device}")
 
     agent = DreamerAgent(env.action_space.n, device=device)
@@ -471,7 +472,10 @@ def train(game_id, timesteps, save_path, n_envs=1):
         except Exception:
             pass
 
+        print("Entering main loop...", flush=True)
         while steps < timesteps:
+            if steps < 5:
+                print(f"  loop step {steps}", flush=True)
             # Act in real environment
             frame = obs[-1]
             action = agent.act(frame, explore=True)
@@ -493,8 +497,8 @@ def train(game_id, timesteps, save_path, n_envs=1):
             else:
                 obs = next_obs
 
-            # Train world model + actor-critic
-            if steps % 2 == 0 and len(agent.buffer) > 500:
+            # Train world model + actor-critic (every 50 real steps)
+            if steps % 50 == 0 and len(agent.buffer) > 500:
                 stats = agent.train_step()
                 if _wandb and _wandb.run and steps % 100 == 0:
                     _wandb.log(stats, step=steps)
