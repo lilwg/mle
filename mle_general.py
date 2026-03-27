@@ -935,8 +935,15 @@ def train(game_id, model_name, timesteps, save_path,
     except Exception as e:
         print(f"wandb not available: {e}")
 
-    # Custom callback to log game stats
-    from stable_baselines3.common.callbacks import BaseCallback
+    # Callbacks for game stats + checkpoints
+    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+    callbacks.append(CheckpointCallback(
+        save_freq=100000 // max(n_envs, 1),  # save every ~100K steps
+        save_path="./checkpoints/",
+        name_prefix=f"{game_id}_{model_name}",
+    ))
+    print(f"Checkpoints saved to ./checkpoints/ every ~100K steps")
+
     class GameStatsCallback(BaseCallback):
         def _on_step(self):
             infos = self.locals.get("infos", [])
