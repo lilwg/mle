@@ -37,13 +37,23 @@ class MameEnv:
                                    throttle=throttle)
         self._wait_for_resources()
 
-        # Get screen dimensions
-        result = self.console.writeln_expect(
-            'local w,h = manager.machine.video:snapshot_size(); print(w..","..h)'
-        )
-        w, h = result.split(",")
-        self._frame_dims = (int(h), int(w))
-        self._frame_size = int(w) * int(h) * 4
+        # Get screen dimensions (retry on failure)
+        import time as _time
+        for _attempt in range(5):
+            result = self.console.writeln_expect(
+                'local w,h = manager.machine.video:snapshot_size(); print(w..","..h)'
+            )
+            if result and "," in result:
+                try:
+                    w, h = result.split(",")
+                    self._frame_dims = (int(h), int(w))
+                    self._frame_size = int(w) * int(h) * 4
+                    break
+                except (ValueError, TypeError):
+                    pass
+            _time.sleep(0.5)
+        else:
+            raise EnvironmentError(f"Failed to get screen dimensions: {result}")
 
         # Create Lua variables
         self.console.writeln('iop = manager.machine.ioport')
