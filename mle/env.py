@@ -182,7 +182,7 @@ class MameEnv:
 
     def _read_data_line(self):
         """Read one line of RAM data from the data pipe."""
-        readable, _, _ = select.select([self._data_file], [], [], 10)
+        readable, _, _ = select.select([self._data_file], [], [], 120)
         if not readable:
             raise TimeoutError("Timeout reading from MAME data pipe")
         line = self._data_file.readline()
@@ -202,7 +202,7 @@ class MameEnv:
         """Read raw pixel data from the data pipe."""
         frame_bytes = b""
         while len(frame_bytes) < self._frame_size:
-            readable, _, _ = select.select([self._data_file], [], [], 10)
+            readable, _, _ = select.select([self._data_file], [], [], 120)
             if not readable:
                 raise TimeoutError("Timeout reading frame data")
             chunk = self._data_file.read(self._frame_size - len(frame_bytes))
