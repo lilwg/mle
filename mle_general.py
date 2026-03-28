@@ -25,7 +25,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mle import MameEnv
 
-ROMS_PATH = "/Users/pat/mame/roms"
+ROMS_PATH = os.environ.get("MLE_ROMS_PATH", "/Users/pat/mame/roms")
 FRAME_SKIP = 4
 OBS_H, OBS_W = 84, 84
 STACK_SIZE = 4
@@ -650,7 +650,7 @@ class MamePixelEnv(gym.Env):
                             for i in range(len(self._score_addrs)))
             delta = score - self._prev_score
             if delta > 0:
-                reward += min(delta / 100.0, 10.0)
+                reward += min(delta / 25.0, 20.0)
             elif delta < -1000:
                 pass  # score wrapped/reset
             self._prev_score = score
@@ -686,9 +686,9 @@ class MamePixelEnv(gym.Env):
                     reward += 1.0  # score changed = good
             self._prev_ocr_score = ocr_score
 
-        # Layer 3: Survival reward (always active as baseline)
-        # Staying alive = good. This is the universal fallback.
-        reward += 0.1  # survive bonus per step
+        # Layer 3: Survival reward (only when no score signal available)
+        if not self._score_addrs:
+            reward += 0.1  # survive bonus per step (fallback only)
 
         # Bootstrap: periodically OCR + RAM scan to find addresses
         if self._scanner and not self._bootstrapped:

@@ -147,6 +147,7 @@ def main():
         "metric.log_every=1000",
         "checkpoint.every=50000",
         "algo.run_test=false",
+        "fabric.accelerator=auto",
     ]
     run()
 
