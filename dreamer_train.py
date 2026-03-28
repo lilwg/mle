@@ -44,8 +44,8 @@ class MameGymWrapper(gym.Env):
         self.observation_space = spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8)
         self._obs_shape = (64, 64, 3)
         self.env = None
-        self._make_env()
-        self.action_space = self.env.action_space
+        self.action_space = spaces.Discrete(5)
+        self._keepalive_running = False
 
     def _make_env(self):
         score_addrs = [int(a, 16) for a in self._game_cfg.get("score_addrs", [])]
@@ -59,12 +59,13 @@ class MameGymWrapper(gym.Env):
         import subprocess, time
         subprocess.run(["pkill", "-9", "-f", f"mame.*{self.game_id}"],
                        capture_output=True)
-        time.sleep(0.3)
+        time.sleep(0.5)
         self.env = MamePixelEnv(
             self.game_id, render=False, throttle=False,
             score_addrs=score_addrs, lives_addr=lives_addr,
             score_encoding=score_encoding)
         self.action_space = self.env.action_space
+        self._keepalive_running = False
 
     def _to_rgb(self, obs):
         """Convert (C, H, W) grayscale stack to (H, W, 3) RGB for sheeprl."""
@@ -76,27 +77,52 @@ class MameGymWrapper(gym.Env):
         return np.stack([gray, gray, gray], axis=-1)  # (64, 64, 3)
 
     def reset(self, seed=None, options=None):
+        self._keepalive_running = False
+        if hasattr(self, '_keepalive_thread'):
+            self._keepalive_thread.join(timeout=2)
+        if self.env is None:
+            self._make_env()
         try:
             obs, info = self.env.reset(seed=seed)
         except Exception:
             self._make_env()
             obs, info = self.env.reset(seed=seed)
+        self.action_space = self.env.action_space
+        self._start_keepalive()
         return self._to_rgb(obs), info
 
     def step(self, action):
+        # Stop keepalive, do step, restart
+        self._keepalive_running = False
+        if hasattr(self, '_keepalive_thread'):
+            self._keepalive_thread.join(timeout=1)
         try:
             obs, reward, term, trunc, info = self.env.step(int(action))
         except Exception:
-            # Pipe broke — restart
             self._make_env()
             obs, _ = self.env.reset()
+            self._start_keepalive()
             return self._to_rgb(obs), -1.0, True, False, {}
+        self._start_keepalive()
         return self._to_rgb(obs), float(reward), bool(term), bool(trunc), info
+
+    def _start_keepalive(self):
+        import threading
+        self._keepalive_running = True
+        def _ka():
+            while self._keepalive_running:
+                try:
+                    self.env.env.step()
+                except Exception:
+                    break
+        self._keepalive_thread = threading.Thread(target=_ka, daemon=True)
+        self._keepalive_thread.start()
 
     def render(self):
         return np.zeros(self._obs_shape, dtype=np.uint8)
 
     def close(self):
+        self._keepalive_running = False
         if self.env:
             try:
                 self.env.close()

@@ -297,10 +297,78 @@ class MameEnv:
                 results.extend([0] * chunk_count)
         return results
 
+    # ── Async mode ──────────────────────────────────────────────────
+    # Keeps MAME alive in background when Python is busy (e.g. training).
+    # Background thread sends empty actions. step() injects real actions.
+
+    def start_async(self):
+        """Start background thread that keeps MAME pipe alive.
+
+        After this, step() is non-blocking: it queues an action and
+        returns the latest data. MAME runs continuously at full speed.
+        """
+        if hasattr(self, '_async_running') and self._async_running:
+            return
+
+        import queue
+        self._async_running = True
+        self._action_queue = queue.Queue()  # actions to inject
+        self._latest_data = {}
+        self._data_lock = threading.Lock()
+        self._frame_request = False
+
+        def _bg_loop():
+            while self._async_running:
+                try:
+                    # Check for queued action
+                    try:
+                        buttons, want_frame = self._action_queue.get_nowait()
+                    except queue.Empty:
+                        buttons, want_frame = None, self._frame_request
+                        if want_frame:
+                            self._frame_request = False
+
+                    data = self._do_step(buttons, want_frame)
+                    with self._data_lock:
+                        self._latest_data = data
+                except Exception:
+                    break
+
+        self._bg_thread = threading.Thread(target=_bg_loop, daemon=True)
+        self._bg_thread.start()
+
+    def stop_async(self):
+        """Stop background thread."""
+        self._async_running = False
+        if hasattr(self, '_bg_thread'):
+            self._bg_thread.join(timeout=2)
+
+    def step_async(self, port=None, field=None):
+        """Queue an action and return latest data (non-blocking).
+
+        Use after start_async(). MAME continues running in background.
+        """
+        buttons = [(port, field)] if port and field else None
+        self._action_queue.put((buttons, False))
+        # Return latest data (may be from a previous frame)
+        with self._data_lock:
+            return dict(self._latest_data)
+
+    def get_latest(self):
+        """Get latest frame data without sending an action."""
+        with self._data_lock:
+            return dict(self._latest_data)
+
+    def request_frame_async(self):
+        """Request pixel data in async mode."""
+        self._frame_request = True
+
     def close(self):
         if self._closed:
             return
         self._closed = True
+        if hasattr(self, '_async_running'):
+            self._async_running = False
         try:
             if self._action_file:
                 self._action_file.close()
