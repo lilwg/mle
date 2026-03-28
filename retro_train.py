@@ -15,7 +15,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 try:
-    import retro
+    import stable_retro
 except ImportError:
     print("Install stable-retro: pip install stable-retro")
     sys.exit(1)
@@ -28,15 +28,11 @@ class RetroGymWrapper(gym.Env):
     metadata = {"render_modes": ["rgb_array"]}
     render_mode = "rgb_array"
 
-    def __init__(self, game_id="Frogger-Genesis", **kwargs):
+    def __init__(self, game_id="Frogger-Genesis-v0", **kwargs):
         super().__init__()
         self.game_id = game_id
         self.observation_space = spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8)
-
-        # Create retro env to get action space
-        self._retro_env = retro.make(game=game_id, use_restricted_actions=retro.Actions.DISCRETE)
-        self.action_space = self._retro_env.action_space
-        self._retro_env.close()
+        self.action_space = spaces.Discrete(126)  # Genesis discrete actions
         self._retro_env = None
 
     def _make_env(self):
@@ -45,9 +41,10 @@ class RetroGymWrapper(gym.Env):
                 self._retro_env.close()
             except Exception:
                 pass
-        self._retro_env = retro.make(
+        self._retro_env = stable_retro.make(
             game=self.game_id,
-            use_restricted_actions=retro.Actions.DISCRETE
+            use_restricted_actions=stable_retro.Actions.DISCRETE,
+            render_mode=None
         )
 
     def _resize(self, obs):
@@ -58,11 +55,14 @@ class RetroGymWrapper(gym.Env):
     def reset(self, seed=None, options=None):
         if self._retro_env is None:
             self._make_env()
-        obs, info = self._retro_env.reset()
+        result = self._retro_env.reset()
+        obs = result[0] if isinstance(result, tuple) else result
+        info = result[1] if isinstance(result, tuple) and len(result) > 1 else {}
         return self._resize(obs), info
 
     def step(self, action):
-        obs, reward, terminated, truncated, info = self._retro_env.step(action)
+        result = self._retro_env.step(int(action))
+        obs, reward, terminated, truncated, info = result[0], result[1], result[2], result[3], result[4]
         return self._resize(obs), float(reward), bool(terminated), bool(truncated), info
 
     def render(self):
